@@ -208,17 +208,24 @@ func _fire_rays(data: WeaponData, state: Dictionary) -> void:
 	var forward := -_camera.global_transform.basis.z
 	var spread_deg := _current_spread(data, state)
 	var world := _owner.get_tree().current_scene
+	var muzzle := _muzzle_position()
+	# Дробь складывается по цели: иначе каждая из девяти дробин SPAS-12 уходит
+	# отдельным надёжным RPC и отдельным хитмаркером.
+	var tally: Dictionary = {}          # Node -> {"amount": float, "headshot": bool}
 
 	for pellet in data.pellets:
 		var dir := _spread_direction(forward, spread_deg)
 		var hit := _cast(origin, dir, data.max_range)
 		var end: Vector3 = hit.get("position", origin + dir * data.max_range)
-		Effects.tracer(world, _muzzle_position(), end)
+		Effects.tracer(world, muzzle, end)
 		if pellet == 0:
-			shot_fired.emit(String(data.id), _muzzle_position(), end)
+			shot_fired.emit(String(data.id), muzzle, end)
 		if hit.is_empty():
 			continue
-		_resolve_hit(hit, data, origin, world)
+		_tally_hit(hit, data, origin, world, tally)
+
+	for target in tally:
+		_apply_tally(target, data, tally[target])
 
 func _cast(origin: Vector3, dir: Vector3, distance: float) -> Dictionary:
 	var space := _owner.get_world_3d().direct_space_state
@@ -227,14 +234,16 @@ func _cast(origin: Vector3, dir: Vector3, distance: float) -> Dictionary:
 	query.exclude = [_owner.get_rid()]
 	return space.intersect_ray(query)
 
-func _resolve_hit(hit: Dictionary, data: WeaponData, origin: Vector3, world: Node) -> void:
+## Эффекты рисуются на каждую дробину, урон только копится.
+func _tally_hit(hit: Dictionary, data: WeaponData, origin: Vector3, world: Node, tally: Dictionary) -> void:
 	var point: Vector3 = hit.position
-	var normal: Vector3 = hit.normal
 	var body: Node = hit.collider
 	var target_health := Damage.find_health(body)
-	var is_flesh := target_health != null
+	# Труп — не плоть: иначе выстрел в него глотается кровавыми искрами вместо
+	# отметины на поверхности.
+	var is_flesh := target_health != null and target_health.alive
 
-	Effects.impact(world, point, normal, is_flesh)
+	Effects.impact(world, point, hit.normal, is_flesh)
 	if not is_flesh:
 		Sfx.play_3d(&"step", point, randf_range(1.4, 1.8), -6.0, 40.0)
 		return
@@ -245,13 +254,22 @@ func _resolve_hit(hit: Dictionary, data: WeaponData, origin: Vector3, world: Nod
 	if headshot:
 		amount *= data.headshot_multiplier
 
-	var dealt := Damage.apply(body, amount, _owner, headshot, data.armor_penetration)
+	var row: Dictionary = tally.get(body, {"amount": 0.0, "headshot": false})
+	row.amount += amount
+	row.headshot = bool(row.headshot) or headshot
+	tally[body] = row
+
+func _apply_tally(body: Node, data: WeaponData, row: Dictionary) -> void:
+	if not is_instance_valid(body):
+		return
+	var headshot: bool = row.headshot
+	var dealt := Damage.apply(body, row.amount, _owner, headshot, data.armor_penetration, String(data.id))
 	if Damage._net_wrapper(body) != null and not body.local_control:
 		return # Подтверждение попадания придёт от владельца цели.
 	if dealt <= 0.0:
 		return
-
-	var killed := not target_health.alive
+	var target_health := Damage.find_health(body)
+	var killed := target_health != null and not target_health.alive
 	Sfx.play_2d(&"headshot" if headshot else &"hit", 1.0, -4.0)
 	hit_confirmed.emit(headshot, killed)
 

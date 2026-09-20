@@ -227,7 +227,7 @@ func _shoot(delta: float) -> void:
 	var amount := _data.damage_at(origin.distance_to(hit.position))
 	if headshot:
 		amount *= _data.headshot_multiplier
-	Damage.apply(body, amount, self, headshot, _data.armor_penetration)
+	Damage.apply(body, amount, self, headshot, _data.armor_penetration, String(_data.id))
 
 func _tick_reload(delta: float) -> void:
 	if _reload_left <= 0.0:

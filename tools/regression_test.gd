@@ -50,6 +50,26 @@ func _run() -> void:
 			_check(node.network_index < 0, "точка оружия офлайн не ждёт хоста")
 			break
 
+	# Дробь складывается по цели: один выстрел — одно подтверждение, а не девять.
+	# Бот ставится в 2.5 м прямо перед игроком: это внутри той же клетки карты
+	# (клетка 6.5 м), поэтому стена между ними появиться не может.
+	var victim: Bot = _bots()[1]
+	var shooter: PlayerCharacter = main.player
+	victim.global_position = shooter.global_position - shooter.global_transform.basis.z * 2.5
+	victim.state = Bot.State.IDLE
+	await get_tree().physics_frame
+	var confirms := [0]
+	shooter.weapons.hit_confirmed.connect(func(_h, _k) -> void: confirms[0] += 1)
+	shooter.weapons.give(&"spas", true)
+	shooter.weapons._equip_left = 0.0
+	shooter.weapons._cooldown = 0.0
+	shooter.weapons._try_fire({"speed": 0.0, "on_floor": true, "crouching": false, "sprinting": false})
+	await get_tree().physics_frame
+	_check(confirms[0] == 1, "выстрел дробью подтверждается один раз (получено %d)" % confirms[0])
+
+func _bots() -> Array:
+	return main.get_node("Actors").get_children().filter(func(n): return n is Bot)
+
 func _first_bot() -> Bot:
 	for node in main.get_node("Actors").get_children():
 		if node is Bot:
