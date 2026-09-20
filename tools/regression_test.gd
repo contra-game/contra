@@ -97,6 +97,15 @@ func _run() -> void:
 	_check(is_equal_approx(main.hud._crosshair.fov_degrees, 55.0), "прицел знает fov камеры")
 	main.player.set_physics_process(true)
 
+	# Повторная сборка не должна удваивать карту.
+	var city: CityMap = main.get_node("Map")
+	var spawns := city.player_spawns.size()
+	var props := city.get_node("Props").get_child_count()
+	city.build(main.match_seed)
+	await get_tree().process_frame
+	_check(city.player_spawns.size() == spawns, "повторная сборка не удваивает спавны")
+	_check(city.get_node("Props").get_child_count() == props, "повторная сборка не удваивает пропы")
+
 func _bots() -> Array:
 	return main.get_node("Actors").get_children().filter(func(n): return n is Bot)
 

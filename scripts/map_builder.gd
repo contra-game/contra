@@ -59,6 +59,16 @@ var _props: Node3D
 var _has_models: bool = ResourceLoader.exists(COMMERCIAL + "building-a.glb")
 
 func build(seed_value: int = 20260920) -> void:
+	# Повторный вызов не должен удваивать карту. remove_child до queue_free —
+	# иначе освобождение отложится до конца кадра, имя "Props" окажется занято
+	# и новый узел получит имя "Props2".
+	player_spawns.clear()
+	bot_spawns.clear()
+	weapon_spawns.clear()
+	for child in get_children():
+		remove_child(child)
+		child.queue_free()
+
 	_rng.seed = seed_value
 	_props = Node3D.new()
 	_props.name = "Props"

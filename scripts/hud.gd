@@ -274,8 +274,13 @@ func push_killfeed(text: String) -> void:
 	var label := _make_label(text, 16, Color(0.86, 0.88, 0.9))
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_killfeed.add_child(label)
+	# Твин, который гасит метку, держит на неё ссылку; немедленный free()
+	# оставляет твин с освобождённой целью. Снимаем с дерева сразу, чтобы лишняя
+	# метка не участвовала в подсчёте до конца кадра.
 	while _killfeed.get_child_count() > 5:
-		_killfeed.get_child(0).free()
+		var oldest := _killfeed.get_child(0)
+		_killfeed.remove_child(oldest)
+		oldest.queue_free()
 	var tween := create_tween()
 	tween.tween_interval(4.5)
 	tween.tween_property(label, "modulate:a", 0.0, 0.6)
