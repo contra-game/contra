@@ -267,7 +267,7 @@ func _avoid_obstacles(dir: Vector3) -> Vector3:
 
 func _blocked(space: PhysicsDirectSpaceState3D, origin: Vector3, dir: Vector3, distance: float) -> bool:
 	var query := PhysicsRayQueryParameters3D.create(origin, origin + dir * distance)
-	query.collision_mask = 1
+	query.collision_mask = 1 | 4          # мир и другие боты
 	query.exclude = [get_rid()]
 	return not space.intersect_ray(query).is_empty()
 
