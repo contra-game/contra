@@ -31,7 +31,7 @@ func _ready() -> void:
 	configure_owner()
 
 func configure_owner() -> void:
-	player.peer_id = Fusion.get_local_player_id() if replicator.has_authority() else replicator.get_owner_id()
+	player.peer_id = NetApi.local_player_id() if replicator.has_authority() else replicator.get_owner_id()
 	player.configure_control(replicator.has_authority())
 	player.add_to_group("combatants")
 	player.team = player.peer_id
@@ -83,29 +83,40 @@ func _on_weapon_changed(data: WeaponData) -> void:
 	if replicator.has_authority():
 		weapon_id = String(data.id)
 
-## Sender берём из транспорта, а номер жизни отсекает урон до респавна.
-## Бронепробитие больше не приезжает по проводу — берём его из каталога по
-## идентификатору ствола. Потолок урона, дистанция и прямая видимость
-## проверяются в Task 6.
+## Урон применяет владелец цели. Стрелок присылает только идентификатор ствола и
+## сумму: потолок, дистанцию и прямую видимость жертва считает сама по каталогу и
+## своей геометрии. Бронепробитие тоже берётся из каталога, а не с провода.
+## Номер жизни отсекает урон, прилетевший после респавна.
 @rpc("any_peer", "call_remote", "reliable")
 func apply_remote_damage(weapon_id_in: String, amount: float, headshot: bool, target_life: int) -> void:
 	if not replicator.has_authority() or not player.health.alive or target_life != life_serial:
 		return
-	var attacker_id: int = Fusion.get_rpc_sender()
+	var attacker_id: int = NetApi.rpc_sender()
 	var attacker := _find_player(attacker_id)
 	if attacker == null or attacker == player or not attacker.health.alive:
 		return
 	var data := Weapons.get_weapon(StringName(weapon_id_in))
-	if data == null or not is_finite(amount) or amount <= 0.0 or amount > 1000.0:
+	if data == null or not is_finite(amount) or amount <= 0.0:
+		return
+	# Потолок — самый жирный законный выстрел этого ствола: вся дробь в голову
+	# в упор, плюс 5 % на расхождение чисел у двух машин.
+	var cap: float = data.damage * float(maxi(data.pellets, 1)) * 1.05
+	if headshot:
+		cap *= data.headshot_multiplier
+	if amount > cap:
+		return
+	if attacker.global_position.distance_to(player.global_position) > data.max_range * 1.2:
+		return
+	if not _has_line_of_sight(attacker):
 		return
 	var dealt := player.health.take_damage(amount, attacker, headshot,
 		clampf(data.armor_penetration, 0.0, 1.0))
 	if dealt > 0.0:
-		Fusion.rpc(confirm_hit, attacker_id, headshot, not player.health.alive, life_serial)
+		NetApi.rpc_all(confirm_hit, [attacker_id, headshot, not player.health.alive, life_serial])
 
 @rpc("authority", "call_remote", "reliable")
 func confirm_hit(attacker_id: int, headshot: bool, killed: bool, victim_life: int) -> void:
-	if Fusion.get_rpc_sender() != replicator.get_owner_id():
+	if NetApi.rpc_sender() != replicator.get_owner_id():
 		return
 	var attacker := _find_player(attacker_id)
 	if attacker == null or not attacker.local_control:
@@ -119,12 +130,12 @@ func confirm_hit(attacker_id: int, headshot: bool, killed: bool, victim_life: in
 	attacker.weapons.hit_confirmed.emit(headshot, killed)
 
 func _on_shot(id: String, origin: Vector3, end: Vector3) -> void:
-	if replicator.has_authority() and Fusion.is_in_room():
-		Fusion.rpc(show_shot, id, origin, end)
+	if replicator.has_authority() and NetApi.is_in_room():
+		NetApi.rpc_all(show_shot, [id, origin, end])
 
 @rpc("authority", "call_remote", "unreliable")
 func show_shot(id: String, origin: Vector3, end: Vector3) -> void:
-	if Fusion.get_rpc_sender() != replicator.get_owner_id() or player.local_control:
+	if NetApi.rpc_sender() != replicator.get_owner_id() or player.local_control:
 		return
 	var data := Weapons.get_weapon(StringName(id))
 	if data == null or not origin.is_finite() or not end.is_finite():
@@ -139,6 +150,21 @@ func _find_player(id: int) -> PlayerCharacter:
 		if node is PlayerCharacter and node.peer_id == id:
 			return node
 	return null
+
+## Из-за интерполяции чужое тело у нас стоит не там, где его видел стрелок,
+## поэтому целимся в три точки по высоте и довольствуемся одной свободной.
+## Маска — только мир: бойцы друг друга не заслоняют, иначе на своего же
+## союзника перед стволом урон бы не проходил.
+func _has_line_of_sight(attacker: PlayerCharacter) -> bool:
+	var space := player.get_world_3d().direct_space_state
+	var from: Vector3 = attacker.global_position + Vector3.UP * 1.55
+	for height in [1.5, 0.9, 0.3]:
+		var query := PhysicsRayQueryParameters3D.create(from, player.global_position + Vector3.UP * height)
+		query.collision_mask = 1
+		query.exclude = [attacker.get_rid(), player.get_rid()]
+		if space.intersect_ray(query).is_empty():
+			return true
+	return false
 
 func _build_world_weapon() -> void:
 	_shown_weapon = weapon_id

@@ -123,6 +123,12 @@ func _client() -> void:
 		await RenderingServer.frame_post_draw
 		_check(get_viewport().get_texture().get_image().save_png(capture_path) == OK, "capture saved")
 	_set_flag("movement_ok")
+	# Урон проверяет жертва и отбрасывает выстрелы без прямой видимости, а спавны
+	# разнесены на полкарты. Встаём в двух метрах от цели — ровно ту линию только
+	# что проверил hitscan выше — и ждём, пока новая позиция доедет до хоста:
+	# видимость он считает по нашему реплицированному телу, а не по нашим словам.
+	main.player.global_position = other.player.global_position + Vector3(0.0, 0.0, 2.0)
+	await get_tree().create_timer(1.5).timeout
 	# Урон по чужому бойцу описывается стволом: бронепробитие жертва берёт из
 	# каталога, а не с провода, поэтому выстрел обязан быть из настоящего ствола.
 	# 25 урона АК: 25 * lerp(0.45, 1.0, 0.72) = 21.15 по здоровью.
@@ -131,6 +137,12 @@ func _client() -> void:
 		return
 	if not await _until(func(): return absf(other.player.health.health - 78.85) < 0.01, "health replicated"):
 		return
+	# Завышенный урон обязан быть отброшен жертвой.
+	var before: float = _other().net_health
+	NetApi.rpc_to_player(_other().replicator.get_owner_id(), _other().apply_remote_damage,
+		["glock", 999.0, true, _other().life_serial])
+	await get_tree().create_timer(1.0).timeout
+	_check(is_equal_approx(_other().net_health, before), "жертва отбросила урон 999 из глока")
 	Damage.apply(other.player, 115.0, main.player, false, 0.95, "awp")
 	if not await _until(func(): return main.kills == 1 and not other.player.health.alive, "kill and death replicated"):
 		return
