@@ -125,5 +125,12 @@ func _report() -> void:
 		player.economy.money, Weapons.get_weapon(&"ak47").price,
 		str(player.economy.can_afford(Weapons.get_weapon(&"ak47").price))])
 	print("звук выстрела AK: %s" % ("записанный wav" if ResourceLoader.exists("res://assets/sfx/weapons/ak47_1.wav") else "синтез"))
+	# Возрождение должно выдавать свежий комплект, а не то, что осталось.
+	player.weapons.slots[0].mag = 2
+	player.weapons.slots[0].reserve = 0
+	var spent := player.weapons.ammo_text()
+	player.respawn(Transform3D.IDENTITY)
+	print("патроны после смерти: было %s, стало %s (ожидалось 30 / 90), оружие=%s" % [
+		spent, player.weapons.ammo_text(), player.weapons.current_data().display_name])
 	print("выживаемость неподвижного игрока (hp/броня): %s" % ", ".join(_timeline))
 	print("--- END ---")

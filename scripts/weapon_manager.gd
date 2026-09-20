@@ -52,10 +52,20 @@ func setup(body: Node3D, camera: Camera3D, pivot: Node3D) -> void:
 	slots.resize(SLOT_COUNT)
 	reset_loadout()
 
+## Возрождение выдаёт свежий комплект. Слоты чистятся полностью: give()
+## на занятом слоте только докладывает патроны в резерв и не трогает магазин,
+## поэтому после смерти оружие оставалось с теми же патронами, что и было.
 func reset_loadout() -> void:
 	_holstered = false
 	reloading = false
 	_reload_left = 0.0
+	_cooldown = 0.0
+	_equip_left = 0.0
+	_spread = 0.0
+	_scoped = false
+	for i in SLOT_COUNT:
+		slots[i] = null
+	current_slot = 0
 	give(default_primary, true)
 	give(default_secondary, false)
 	_equip(0, true)
