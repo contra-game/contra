@@ -9,7 +9,10 @@
 ## выпускает бойца, когда матч уже построил карту.
 ##
 ## Меню проверяет готовность сети через NetConfig.blocker().
-class_name NetManager
+##
+## class_name намеренно нет: файл ссылается на классы GDExtension и без
+## установленного Photon SDK не компилируется, поэтому его грузит по пути
+## session.gd и только при живом расширении.
 extends Node
 
 signal session_state(text: String)
@@ -258,7 +261,7 @@ func _on_master_changed(_old_id: int = 0, _new_id: int = 0) -> void:
 
 ## Сигнал приходит и на свои, и на чужие объекты: своего отличаем по авторитету.
 func _on_spawned(node: Node) -> void:
-	if node is NetPlayer:
+	if node.has_method("configure_owner"):
 		node.configure_owner()
 	var replicator: FusionReplicator = node.get_node_or_null("Replicator")
 	var mine: bool = replicator != null and replicator.has_authority()

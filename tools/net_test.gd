@@ -43,7 +43,8 @@ func _report() -> void:
 	var actors: Node = main.get_node("Actors")
 	var net_players := 0
 	for node in actors.get_children():
-		if node is NetPlayer:
+		# Обвязку узнаём по методу: её скрипт не существует без Photon SDK.
+		if node.has_method("apply_remote_damage"):
 			net_players += 1
 	print("сетевых бойцов в сцене: %d, свой игрок: %s" % [
 		net_players, str(main.player != null)])

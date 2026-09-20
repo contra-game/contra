@@ -1,5 +1,7 @@
 ## Владелец симулирует бойца; остальные отображают полученное состояние.
-class_name NetPlayer
+##
+## class_name намеренно нет: файл ссылается на классы GDExtension и живёт
+## только вместе с поднятым Photon SDK.
 extends Node3D
 
 @onready var replicator: FusionSharedReplicator = $Replicator
@@ -82,17 +84,22 @@ func _on_weapon_changed(data: WeaponData) -> void:
 		weapon_id = String(data.id)
 
 ## Sender берём из транспорта, а номер жизни отсекает урон до респавна.
+## Бронепробитие больше не приезжает по проводу — берём его из каталога по
+## идентификатору ствола. Потолок урона, дистанция и прямая видимость
+## проверяются в Task 6.
 @rpc("any_peer", "call_remote", "reliable")
-func apply_remote_damage(amount: float, headshot: bool, penetration: float, target_life: int) -> void:
+func apply_remote_damage(weapon_id_in: String, amount: float, headshot: bool, target_life: int) -> void:
 	if not replicator.has_authority() or not player.health.alive or target_life != life_serial:
 		return
 	var attacker_id: int = Fusion.get_rpc_sender()
 	var attacker := _find_player(attacker_id)
 	if attacker == null or attacker == player or not attacker.health.alive:
 		return
-	if not is_finite(amount) or amount <= 0.0 or amount > 1000.0 or not is_finite(penetration):
+	var data := Weapons.get_weapon(StringName(weapon_id_in))
+	if data == null or not is_finite(amount) or amount <= 0.0 or amount > 1000.0:
 		return
-	var dealt := player.health.take_damage(amount, attacker, headshot, clampf(penetration, 0.0, 1.0))
+	var dealt := player.health.take_damage(amount, attacker, headshot,
+		clampf(data.armor_penetration, 0.0, 1.0))
 	if dealt > 0.0:
 		Fusion.rpc(confirm_hit, attacker_id, headshot, not player.health.alive, life_serial)
 

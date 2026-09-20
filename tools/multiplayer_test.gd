@@ -70,7 +70,7 @@ func _host() -> void:
 		return
 	if not await _until(func(): return main.player.health.health < 100.0, "damage received"):
 		return
-	_check(is_equal_approx(main.player.health.health, 88.75), "armor penetration preserved")
+	_check(is_equal_approx(main.player.health.health, 78.85), "armor penetration from catalog")
 	_set_flag("damage_ok")
 	if not await _until(func(): return main.deaths == 1, "death counted"):
 		return
@@ -123,12 +123,15 @@ func _client() -> void:
 		await RenderingServer.frame_post_draw
 		_check(get_viewport().get_texture().get_image().save_png(capture_path) == OK, "capture saved")
 	_set_flag("movement_ok")
-	Damage.apply(other.player, 25.0, main.player, false, 0.0)
+	# Урон по чужому бойцу описывается стволом: бронепробитие жертва берёт из
+	# каталога, а не с провода, поэтому выстрел обязан быть из настоящего ствола.
+	# 25 урона АК: 25 * lerp(0.45, 1.0, 0.72) = 21.15 по здоровью.
+	Damage.apply(other.player, 25.0, main.player, false, 0.72, "ak47")
 	if not await _until(func(): return _flag("damage_ok") and hits == 1, "hit acknowledged"):
 		return
-	if not await _until(func(): return absf(other.player.health.health - 88.75) < 0.01, "health replicated"):
+	if not await _until(func(): return absf(other.player.health.health - 78.85) < 0.01, "health replicated"):
 		return
-	Damage.apply(other.player, 200.0, main.player, false, 1.0)
+	Damage.apply(other.player, 115.0, main.player, false, 0.95, "awp")
 	if not await _until(func(): return main.kills == 1 and not other.player.health.alive, "kill and death replicated"):
 		return
 	_check(main.player.economy.money == 1100, "kill pays once")
@@ -180,9 +183,9 @@ func _client() -> void:
 func _fighters() -> Array:
 	if not is_instance_valid(main):
 		return []
-	return main.actors.get_children().filter(func(n): return n is NetPlayer)
+	return main.actors.get_children().filter(func(n): return n.has_method("apply_remote_damage"))
 
-func _other() -> NetPlayer:
+func _other() -> Node:
 	for n in _fighters():
 		if not n.player.local_control:
 			return n

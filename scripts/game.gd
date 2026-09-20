@@ -20,7 +20,9 @@ const BOT_SCENE := preload("res://scenes/bot.tscn")
 @onready var hud: Hud = $Hud
 
 var player: PlayerCharacter
-var net: NetManager
+## Обычный Node, а не типизированный менеджер: его скрипт ссылается на классы
+## GDExtension и не компилируется без установленного Photon SDK.
+var net: Node
 var kills: int = 0
 var deaths: int = 0
 
