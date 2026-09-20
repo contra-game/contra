@@ -21,6 +21,7 @@ var _killfeed: VBoxContainer
 var _damage_flash: ColorRect
 var _pause_panel: PanelContainer
 var _shop: Shop
+var _scope: ScopeOverlay
 var _money_label: Label
 var _paused: bool = false
 var _respawn_left: float = 0.0
@@ -34,6 +35,8 @@ func _ready() -> void:
 	_build_center()
 	_build_pause()
 	_build_shop()
+	_scope = ScopeOverlay.new()
+	add_child(_scope)
 
 func bind(game_node: Node, player_node: PlayerCharacter) -> void:
 	game = game_node
@@ -46,6 +49,7 @@ func bind(game_node: Node, player_node: PlayerCharacter) -> void:
 	player.weapons.weapon_changed.connect(_on_weapon_changed)
 	player.weapons.spread_changed.connect(_crosshair.set_spread)
 	player.weapons.hit_confirmed.connect(_on_hit_confirmed)
+	player.weapons.scope_changed.connect(_on_scope_changed)
 	player.health.damaged.connect(_on_damaged)
 
 	_shop.bind(player_node, player_node.economy)
@@ -258,3 +262,10 @@ func _unhandled_input(event: InputEvent) -> void:
 	var digit := key.physical_keycode - KEY_1
 	if digit >= 0 and digit <= 8 and _shop.handle_digit(digit):
 		get_viewport().set_input_as_handled()
+
+## В оптике обычный прицел не нужен — его заменяет перекрестие окуляра.
+func _on_scope_changed(active: bool) -> void:
+	_scope.visible = active
+	_crosshair.visible = not active and player != null and not player.is_dead()
+	if active:
+		_scope.queue_redraw()

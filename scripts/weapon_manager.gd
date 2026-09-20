@@ -10,14 +10,15 @@ signal weapon_changed(data: WeaponData)
 signal spread_changed(degrees: float)
 signal recoil_kick(pitch_deg: float, yaw_deg: float)
 signal hit_confirmed(headshot: bool, killed: bool)
+signal scope_changed(active: bool)
 
 const SLOT_COUNT := 2
 const HIT_MASK := 1 | 2 | 4        # мир + игроки + боты
 
 ## Положения модели оружия относительно камеры.
-const HIP_POSITION := Vector3(0.2, -0.18, -0.5)
-const AIM_POSITION := Vector3(0.0, -0.052, -0.4)
-const SPRINT_POSITION := Vector3(0.25, -0.23, -0.46)
+const HIP_POSITION := Vector3(0.18, -0.13, -0.45)
+const AIM_POSITION := Vector3(0.0, -0.05, -0.35)
+const SPRINT_POSITION := Vector3(0.22, -0.18, -0.4)
 
 @export var default_primary: StringName = &"ak47"
 @export var default_secondary: StringName = &"glock"
@@ -42,6 +43,7 @@ var _kick: float = 0.0
 var _anim: AnimationPlayer
 var _fire_anim: String = ""
 var _reload_anim: String = ""
+var _scoped: bool = false
 
 func setup(body: Node3D, camera: Camera3D, pivot: Node3D) -> void:
 	_owner = body
@@ -96,6 +98,7 @@ func player_tick(delta: float, state: Dictionary) -> void:
 	_cooldown = maxf(_cooldown - delta, 0.0)
 	_equip_left = maxf(_equip_left - delta, 0.0)
 	aiming = Input.is_action_pressed("aim") and _equip_left <= 0.0 and not reloading
+	_update_scope()
 
 	_tick_reload(delta)
 	_tick_spread(delta, state)
@@ -353,8 +356,13 @@ func _build_view_model(data: WeaponData) -> void:
 		var scene: PackedScene = load(data.model_path)
 		var model := scene.instantiate() as Node3D
 		if model != null:
-			_view_model.add_child(model)
-			ViewModel.fit(model, data)
+			# Два уровня: внешний узел двигают прицеливание и покачивание,
+			# внутренний отвечает за масштаб и раскладку модели.
+			var holder := Node3D.new()
+			_view_model.add_child(holder)
+			holder.add_child(model)
+			ViewModel.fit(holder, model, data)
+			ViewModel.attach_hands(_view_model, data)
 			_anim = _find_animation_player(model)
 			_fire_anim = _resolve_anim(data.anim_fire, ["FireWBullet", "Fire"])
 			_reload_anim = _resolve_anim(data.anim_reload, ["Reload"])
@@ -406,6 +414,8 @@ func _add_box(size: Vector3, offset: Vector3, mat: Material) -> void:
 
 func _update_view_model(delta: float, state: Dictionary) -> void:
 	if _view_model == null:
+		return
+	if _scoped:
 		return
 	_view_model.visible = true
 	_kick = lerpf(_kick, 0.0, delta * 12.0)
@@ -489,3 +499,14 @@ func _muzzle_position() -> Vector3:
 	var data := current_data()
 	var length: float = data.length if data != null else 0.6
 	return _camera.global_position - _camera.global_transform.basis.z * (length + 0.2) - _camera.global_transform.basis.y * 0.08
+
+## Оптика: в прицеливании модель убирается с экрана, вместо неё окуляр.
+func _update_scope() -> void:
+	var data := current_data()
+	var active: bool = aiming and data != null and data.has_scope
+	if active == _scoped:
+		return
+	_scoped = active
+	if _view_model != null:
+		_view_model.visible = not active
+	scope_changed.emit(active)

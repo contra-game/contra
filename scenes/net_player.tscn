@@ -1,0 +1,11 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="PackedScene" path="res://scenes/player.tscn" id="1_player"]
+[ext_resource type="Script" path="res://scripts/net_player.gd" id="2_net"]
+
+[node name="NetPlayer" type="Node3D"]
+script = ExtResource("2_net")
+
+[node name="Replicator" type="FusionSharedReplicator" parent="."]
+
+[node name="Player" parent="." instance=ExtResource("1_player")]

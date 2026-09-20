@@ -14,14 +14,14 @@ enum State { IDLE, PATROL, CHASE, ATTACK, DEAD }
 
 @export_group("Поведение")
 @export var move_speed: float = 4.2
-@export var sight_range: float = 55.0
+@export var sight_range: float = 45.0
 @export var fov_degrees: float = 130.0
 ## Задержка перед первым выстрелом после обнаружения цели.
-@export var reaction_time: float = 0.62
+@export var reaction_time: float = 0.95
 ## Во сколько раз бот мажет сильнее игрока.
-@export var accuracy_penalty: float = 3.4
+@export var accuracy_penalty: float = 4.6
 @export var burst_min: int = 3
-@export var burst_max: int = 6
+@export var burst_max: int = 5
 
 @onready var health: Health = $Health
 @onready var mesh_root: Node3D = $Mesh
@@ -41,6 +41,7 @@ var _repath: float = 0.0
 var _strafe: float = 1.0
 var _strafe_timer: float = 0.0
 var _model_anim: AnimationPlayer
+var _weapon_model: Node3D
 
 func _ready() -> void:
 	_data = Weapons.get_weapon(weapon_id)
@@ -189,14 +190,14 @@ func _shoot(delta: float) -> void:
 		_burst_left = randi_range(burst_min, burst_max)
 	_burst_left -= 1
 	if _burst_left <= 0:
-		_burst_pause = randf_range(0.6, 1.5)
+		_burst_pause = randf_range(0.9, 2.0)
 
 	var origin := _eye_position()
 	var aim_point: Vector3 = target.global_position + Vector3.UP * randf_range(0.9, 1.5)
 	var dir := (aim_point - origin).normalized()
 	# Чем дальше цель, тем сильнее бот мажет: иначе восемь ботов простреливают
 	# всю карту насквозь и у игрока нет шанса перебежать улицу.
-	var distance_penalty := 1.0 + origin.distance_to(aim_point) / 30.0
+	var distance_penalty := 1.0 + origin.distance_to(aim_point) / 22.0
 	dir = _apply_spread(dir, (_data.spread_base + 0.6) * accuracy_penalty * distance_penalty)
 
 	var space := get_world_3d().direct_space_state
@@ -326,6 +327,7 @@ func _build_visual() -> void:
 		# Без этого боец стоит в T-позе, пока не сделает первый шаг.
 		if _model_anim != null and _model_anim.has_animation("idle"):
 			_model_anim.play("idle")
+		_attach_weapon(model)
 		return
 
 	var mat := StandardMaterial3D.new()
@@ -350,3 +352,34 @@ func _update_animation() -> void:
 		return
 	if _model_anim.current_animation != wanted and _model_anim.has_animation(wanted):
 		_model_anim.play(wanted)
+
+## Ствол в руке: видно, с чем бот бегает, и понятно, чего от него ждать.
+## Крепится к кости правой кисти, поэтому едет вместе с анимацией.
+func _attach_weapon(model: Node3D) -> void:
+	if _data == null or _data.model_path == "" or not ResourceLoader.exists(_data.model_path):
+		return
+	var skeleton: Skeleton3D = null
+	for node in ViewModel.walk(model):
+		if node is Skeleton3D:
+			skeleton = node
+			break
+	if skeleton == null:
+		return
+	var bone := skeleton.find_bone("RightHand")
+	if bone < 0:
+		return
+
+	var attachment := BoneAttachment3D.new()
+	attachment.name = "WeaponHand"
+	skeleton.add_child(attachment)
+	attachment.bone_idx = bone
+
+	var holder := Node3D.new()
+	attachment.add_child(holder)
+	var weapon := (load(_data.model_path) as PackedScene).instantiate() as Node3D
+	holder.add_child(weapon)
+	ViewModel.fit(holder, weapon, _data)
+	# Кость идёт в масштабе скелета, а он уже ужат под рост бойца.
+	holder.scale *= 1.0 / maxf(model.scale.x, 0.001)
+	ViewModel.paint(weapon, _data.body_color, true)
+	_weapon_model = weapon

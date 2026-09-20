@@ -12,9 +12,30 @@ static func apply(target: Node, amount: float, attacker: Node, headshot: bool, p
 	var hp := find_health(target)
 	if hp == null:
 		return 0.0
-	if not target.is_inside_tree() or not target.multiplayer.is_server():
+	if not target.is_inside_tree():
+		return 0.0
+
+	# В сетевом матче здоровье списывает владелец цели, поэтому чужому бойцу
+	# отправляем RPC вместо прямого урона.
+	var net := _net_wrapper(target)
+	if net != null:
+		if net.replicator.has_authority():
+			return hp.take_damage(amount, attacker, headshot, penetration)
+		var attacker_id: int = attacker.get("peer_id") if attacker != null and attacker.get("peer_id") != null else 0
+		Fusion.rpc_to_player(net.replicator.get_owner_id(),
+			Callable(net, "apply_remote_damage").bind(amount, headshot, attacker_id))
+		return amount
+
+	if not target.multiplayer.is_server():
 		return 0.0
 	return hp.take_damage(amount, attacker, headshot, penetration)
+
+## Боец, завёрнутый в сетевую обвязку, либо null для ботов и офлайна.
+static func _net_wrapper(target: Node) -> Node:
+	var parent := target.get_parent()
+	if parent != null and parent.get_script() != null and parent.has_method("apply_remote_damage"):
+		return parent
+	return null
 
 static func find_health(target: Node) -> Health:
 	for child in target.get_children():

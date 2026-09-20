@@ -16,6 +16,7 @@ var _timeline: Array[String] = []
 
 func _ready() -> void:
 	main = load("res://scenes/main.tscn").instantiate()
+	main.online = false   # проверка логики идёт офлайн и детерминированно
 	add_child(main)
 
 func _process(delta: float) -> void:
@@ -97,6 +98,17 @@ func _report() -> void:
 	var gave: bool = player.weapons.give(&"awp", true)
 	print("выдача AWP: %s, в руках=%s, патроны=%s" % [
 		str(gave), player.weapons.current_data().display_name, player.weapons.ammo_text()])
+	var pivot := player.weapon_pivot
+	if pivot.get_child_count() > 0:
+		var vm: Node3D = pivot.get_child(0)
+		print("вьюмодель: видима=%s поз=%s масштаб=%s детей=%d" % [str(vm.visible), str(vm.position.snappedf(0.001)), str(vm.scale.snappedf(0.001)), vm.get_child_count()])
+		if vm.get_child_count() > 0:
+			var holder: Node3D = vm.get_child(0)
+			print("  держатель: поз=%s масштаб=%s" % [str(holder.position.snappedf(0.001)), str(holder.scale.snappedf(0.001))])
+			if holder.get_child_count() > 0:
+				var m: Node3D = holder.get_child(0)
+				print("  модель: локально=%s глобально=%s" % [str(m.position.snappedf(0.001)), str(m.global_position.snappedf(0.01))])
+				print("  камера: %s" % str(player.camera.global_position.snappedf(0.01)))
 	print("экономика: денег=%d, AK стоит %d, хватает=%s" % [
 		player.economy.money, Weapons.get_weapon(&"ak47").price,
 		str(player.economy.can_afford(Weapons.get_weapon(&"ak47").price))])

@@ -12,6 +12,9 @@ const PLAYER_SCENE := preload("res://scenes/player.tscn")
 const BOT_SCENE := preload("res://scenes/bot.tscn")
 
 @export var bot_count: int = 8
+## В сетевом матче ботов меньше: они локальные у каждого клиента.
+@export var online_bot_count: int = 4
+@export var online: bool = true
 @export var respawn_delay: float = 3.0
 @export var bot_respawn_delay: float = 5.0
 @export var match_seed: int = 20260920
@@ -21,6 +24,7 @@ const BOT_SCENE := preload("res://scenes/bot.tscn")
 @onready var hud: Hud = $Hud
 
 var player: PlayerCharacter
+var net: NetManager
 var kills: int = 0
 var deaths: int = 0
 
@@ -29,9 +33,34 @@ var _rng := RandomNumberGenerator.new()
 func _ready() -> void:
 	_rng.seed = match_seed
 	map.build(match_seed)
-	_spawn_player()
-	_spawn_bots()
 	_spawn_pickups()
+
+	# Photon добавляет свои узлы в дерево, поэтому сеть поднимается кадром
+	# позже: во время _ready сцена ещё «занята» и add_child падает.
+	if online:
+		await get_tree().process_frame
+		if _start_network():
+			# В сети своего бойца создаёт Photon — ждём сигнала о спавне.
+			_spawn_bots(online_bot_count)
+			return
+
+	_spawn_player()
+	_spawn_bots(bot_count)
+
+## Возвращает false, если сети нет: тогда матч идёт офлайн с ботами.
+func _start_network() -> bool:
+	net = NetManager.new()
+	net.name = "NetManager"
+	add_child(net)
+	net.session_state.connect(func(text: String) -> void: killfeed.emit(text))
+	net.local_player_spawned.connect(_on_local_player_spawned)
+	return net.start(actors)
+
+func _on_local_player_spawned(node: Node) -> void:
+	player = node.get_node("Player") as PlayerCharacter
+	player.global_transform = _pick(map.player_spawns)
+	player.died.connect(_on_player_died)
+	player.weapons.hit_confirmed.connect(_on_player_hit)
 	hud.bind(self, player)
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -49,9 +78,10 @@ func _spawn_player() -> void:
 	player.global_transform = _pick(map.player_spawns)
 	player.died.connect(_on_player_died)
 	player.weapons.hit_confirmed.connect(_on_player_hit)
+	hud.bind(self, player)
 
-func _spawn_bots() -> void:
-	for i in bot_count:
+func _spawn_bots(count: int) -> void:
+	for i in count:
 		var bot := BOT_SCENE.instantiate() as Bot
 		bot.display_name = "Бот %d" % (i + 1)
 		bot.team = 1

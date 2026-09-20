@@ -38,6 +38,7 @@ func _ready() -> void:
 	}))
 	_register(_make({
 		"id": &"awp", "name": "AWP", "slot": WeaponData.Slot.PRIMARY, "price": 4750,
+		"model_scale": 0.95,
 		"mode": WeaponData.FireMode.BOLT,
 		"damage": 115.0, "hs": 2.2, "pen": 0.95, "rpm": 41.0,
 		"mag": 5, "reserve": 25, "reload": 3.5,
@@ -119,7 +120,7 @@ func _make(d: Dictionary) -> WeaponData:
 	w.move_speed_mult = d.get("speed", 1.0)
 	w.shot_pitch = d.get("pitch", 1.0)
 	w.model_path = d.get("model", "")
-	w.model_scale = d.get("model_scale", 1.0)
+	w.model_scale = d.get("model_scale", 1.35)
 	w.model_offset = d.get("model_offset", Vector3.ZERO)
 	w.model_rotation = d.get("model_rotation", Vector3.ZERO)
 	w.anim_fire = d.get("fire_anim", "")

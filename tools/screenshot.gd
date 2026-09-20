@@ -7,6 +7,7 @@ const WARMUP := 1.2
 
 func _ready() -> void:
 	var main: Node = load("res://scenes/main.tscn").instantiate()
+	main.online = false   # снимки делаем в офлайн-матче
 	add_child(main)
 	# Боты замораживаются, иначе к моменту съёмки игрок обычно уже убит
 	# и оружие убрано в кобуру.
@@ -28,6 +29,28 @@ func _ready() -> void:
 	overview.look_at(Vector3.ZERO, Vector3.UP)
 	overview.current = true
 	await _shoot("res://tools/shot_map.png")
+
+	# Отладочный кадр: игрок со стороны, видно, где висит модель оружия.
+	var player: PlayerCharacter = main.player
+	overview.global_position = player.global_position + player.global_transform.basis * Vector3(1.4, 1.9, 1.2)
+	overview.look_at(player.camera.global_position, Vector3.UP)
+	overview.fov = 55.0
+	await _shoot("res://tools/shot_thirdperson.png")
+	overview.fov = 70.0
+
+	# Кадр с оптикой: выдаём AWP и зажимаем прицеливание.
+	player.weapons.give(&"awp", true)
+	var aim := InputEventAction.new()
+	aim.action = "aim"
+	aim.pressed = true
+	Input.parse_input_event(aim)
+	await get_tree().create_timer(0.4).timeout
+	player.camera.current = true
+	await _shoot("res://tools/shot_scope.png")
+	aim.pressed = false
+	Input.parse_input_event(aim)
+	await get_tree().process_frame
+	overview.current = true
 
 	# Кадр магазина: событие отправляется как настоящее нажатие B.
 	var buy := InputEventAction.new()
