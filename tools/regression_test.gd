@@ -40,6 +40,13 @@ func _run() -> void:
 	await get_tree().physics_frame
 	_check(bot.collision_layer == 0, "труп бота убран со слоя попаданий")
 
+	var space := player.get_world_3d().direct_space_state
+	var across := PhysicsRayQueryParameters3D.create(
+		bot.global_position + Vector3.UP * 0.9 + Vector3.RIGHT * 4.0,
+		bot.global_position + Vector3.UP * 0.9 - Vector3.RIGHT * 4.0)
+	across.collision_mask = 1 | 2 | 4
+	_check(space.intersect_ray(across).get("collider") != bot, "луч проходит сквозь труп")
+
 	# Игроки должны сталкиваться телами друг с другом.
 	_check(player.collision_mask & 2 != 0, "игрок сталкивается с игроками")
 
