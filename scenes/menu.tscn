@@ -58,6 +58,7 @@ text = "Имя"
 layout_mode = 2
 size_flags_horizontal = 3
 placeholder_text = "Игрок"
+max_length = 20
 
 [node name="RoomRow" type="HBoxContainer" parent="Center/Panel/Rows"]
 layout_mode = 2
@@ -71,6 +72,7 @@ text = "Комната"
 layout_mode = 2
 size_flags_horizontal = 3
 placeholder_text = "contra-city"
+max_length = 24
 
 [node name="OnlineButton" type="Button" parent="Center/Panel/Rows"]
 custom_minimum_size = Vector2(0, 42)

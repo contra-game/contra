@@ -76,6 +76,10 @@ func _run() -> void:
 			allowed += 1
 	_check(allowed == 30, "бюджет RPC пропускает ровно запас (пропущено %d)" % allowed)
 
+	# Имя приходит от чужого клиента: длину режем при показе.
+	main.player.display_name = "Ы".repeat(200)
+	_check(main._name_of(main.player).length() <= 24, "длинное имя обрезается в киллфиде")
+
 func _bots() -> Array:
 	return main.get_node("Actors").get_children().filter(func(n): return n is Bot)
 

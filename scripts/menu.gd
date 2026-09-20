@@ -53,11 +53,21 @@ func _on_offline() -> void:
 	_remember()
 	Session.start_offline()
 
+const NAME_LIMIT := 20
+const ROOM_LIMIT := 24
+
 func _remember() -> void:
-	Session.player_name = name_edit.text.strip_edges()
-	Session.room_name = room_edit.text.strip_edges()
-	if Session.player_name == "":
-		Session.player_name = "Игрок"
-	if Session.room_name == "":
-		Session.room_name = "contra-city"
+	Session.player_name = _clean(name_edit.text, NAME_LIMIT, "Игрок")
+	Session.room_name = _clean(room_edit.text, ROOM_LIMIT, "contra-city")
+	name_edit.text = Session.player_name
+	room_edit.text = Session.room_name
 	Session.save_settings()
+
+## Решётка — разделитель в user_id («Имя#1234»), поэтому в самом имени её быть
+## не должно: лобби показало бы обрезанное имя. Длину режем здесь же — имя
+## уезжает всем по сети, и отсутствие лимита превращает его в канал для мусора.
+func _clean(text: String, limit: int, fallback: String) -> String:
+	var value := text.replace("#", "").strip_edges()
+	if value.length() > limit:
+		value = value.substr(0, limit)
+	return value if value != "" else fallback

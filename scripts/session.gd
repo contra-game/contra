@@ -175,5 +175,12 @@ func load_settings() -> void:
 	var config := ConfigFile.new()
 	if config.load(SETTINGS_PATH) != OK:
 		return
-	player_name = str(config.get_value("player", "name", player_name))
-	room_name = str(config.get_value("player", "room", room_name))
+	player_name = _sanitize(str(config.get_value("player", "name", player_name)), 20, "Игрок")
+	room_name = _sanitize(str(config.get_value("player", "room", room_name)), 24, "contra-city")
+
+## Файл настроек лежит у пользователя и правится руками — доверять ему нельзя.
+func _sanitize(value: String, limit: int, fallback: String) -> String:
+	var text := value.replace("#", "").strip_edges()
+	if text.length() > limit:
+		text = text.substr(0, limit)
+	return text if text != "" else fallback

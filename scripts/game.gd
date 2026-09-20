@@ -223,7 +223,9 @@ func _name_of(node: Node) -> String:
 	if node == null or not is_instance_valid(node):
 		return "Мир"
 	var label = node.get("display_name")
-	return str(label) if label != null else node.name
+	var text: String = str(label) if label != null else String(node.name)
+	# Имя чужого бойца реплицируется его клиентом: при показе режем длину.
+	return text.substr(0, 24)
 
 ## Деньги начисляются за фактическое убийство, а не за факт смерти цели:
 ## так добивание чужой цели не оплачивается.

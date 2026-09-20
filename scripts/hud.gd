@@ -109,7 +109,7 @@ func _refresh_scoreboard() -> void:
 			if wrapper == null or not wrapper.has_method("apply_remote_damage"):
 				continue
 			rows.append("%s%s        %d / %d" % [
-				actor.display_name, " (вы)" if actor.local_control else "",
+				actor.display_name.substr(0, 24), " (вы)" if actor.local_control else "",
 				wrapper.frags, wrapper.deaths])
 	elif game != null:
 		rows.append("Тренировка\n%s        %d / %d" % [Session.player_name, game.kills, game.deaths])
