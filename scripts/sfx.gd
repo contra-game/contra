@@ -11,9 +11,16 @@ const VOLUME_DB := -8.0
 const WEAPON_SFX_DIR := "res://assets/sfx/weapons/"
 const WEAPON_SFX_VARIANTS := 2
 
+const POOL_3D := 24
+const POOL_2D := 8
+
 var _bank: Dictionary = {}
 var _weapon_shots: Dictionary = {}     # StringName -> Array[AudioStream]
 var _rng := RandomNumberGenerator.new()
+var _pool_3d: Array[AudioStreamPlayer3D] = []
+var _pool_2d: Array[AudioStreamPlayer] = []
+var _next_3d: int = 0
+var _next_2d: int = 0
 
 func _ready() -> void:
 	_rng.randomize()
@@ -25,6 +32,19 @@ func _ready() -> void:
 	_bank["step"] = _render(_gen_step, 0.10, 0.6)
 	_bank["death"] = _render(_gen_death, 0.45, 0.3)
 	_bank["pickup"] = _render(_gen_pickup, 0.20, 0.0)
+
+	# Пул вместо узла на каждый звук: восемь ботов с автоматами создавали и
+	# освобождали десятки AudioStreamPlayer3D в секунду. Узлы живут под
+	# автозагрузкой и переживают смену сцены — World3D у корневого окна тот же.
+	for i in POOL_3D:
+		var p3 := AudioStreamPlayer3D.new()
+		p3.unit_size = 10.0
+		add_child(p3)
+		_pool_3d.append(p3)
+	for i in POOL_2D:
+		var p2 := AudioStreamPlayer.new()
+		add_child(p2)
+		_pool_2d.append(p2)
 
 ## Выстрел конкретного ствола: записанный сэмпл, если он есть.
 func play_shot(weapon_id: StringName, position: Vector3, pitch: float = 1.0) -> void:
@@ -43,28 +63,42 @@ func play_2d(sound: StringName, pitch: float = 1.0, db_offset: float = 0.0) -> v
 	var stream: AudioStream = _bank.get(sound)
 	if stream == null:
 		return
-	var p := AudioStreamPlayer.new()
+	var p := _take_2d()
 	p.stream = stream
 	p.pitch_scale = pitch * _rng.randf_range(0.97, 1.03)
 	p.volume_db = VOLUME_DB + db_offset
-	add_child(p)
-	p.finished.connect(p.queue_free)
 	p.play()
 
 func _spawn_3d(stream: AudioStream, position: Vector3, pitch: float, db_offset: float, max_distance: float) -> void:
-	var root := _sound_root()
-	if root == null:
-		return
-	var p := AudioStreamPlayer3D.new()
+	var p := _take_3d()
 	p.stream = stream
 	p.pitch_scale = pitch * _rng.randf_range(0.96, 1.04)
 	p.volume_db = VOLUME_DB + db_offset
 	p.max_distance = max_distance
-	p.unit_size = 10.0
-	root.add_child(p)
 	p.global_position = position
-	p.finished.connect(p.queue_free)
 	p.play()
+
+## Свободный слот, иначе самый старый по кругу: обрыв далёкого звука слышно
+## меньше, чем просадку от аллокаций.
+func _take_3d() -> AudioStreamPlayer3D:
+	for i in _pool_3d.size():
+		var index := (_next_3d + i) % _pool_3d.size()
+		if not _pool_3d[index].playing:
+			_next_3d = (index + 1) % _pool_3d.size()
+			return _pool_3d[index]
+	var oldest := _pool_3d[_next_3d]
+	_next_3d = (_next_3d + 1) % _pool_3d.size()
+	return oldest
+
+func _take_2d() -> AudioStreamPlayer:
+	for i in _pool_2d.size():
+		var index := (_next_2d + i) % _pool_2d.size()
+		if not _pool_2d[index].playing:
+			_next_2d = (index + 1) % _pool_2d.size()
+			return _pool_2d[index]
+	var oldest := _pool_2d[_next_2d]
+	_next_2d = (_next_2d + 1) % _pool_2d.size()
+	return oldest
 
 ## Ленивая загрузка сэмплов ствола; пустой массив — сэмплов нет.
 func _shots_for(weapon_id: StringName) -> Array:
@@ -115,12 +149,6 @@ func _gen_pickup(t: float) -> float:
 	return sin(TAU * f * t) * exp(-t * 11.0) * 0.4
 
 # --- инфраструктура ----------------------------------------------------------
-
-func _sound_root() -> Node:
-	var tree := get_tree()
-	if tree == null:
-		return null
-	return tree.current_scene if tree.current_scene != null else tree.root
 
 func _noise() -> float:
 	return _rng.randf_range(-1.0, 1.0)

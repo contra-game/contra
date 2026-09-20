@@ -29,6 +29,14 @@ func set_spread(degrees: float) -> void:
 	spread_degrees = degrees
 	queue_redraw()
 
+## Разброс считается в пикселях от углового, поэтому прицелу нужен текущий fov:
+## в оптике и в прицеливании он другой.
+func set_fov(degrees: float) -> void:
+	if absf(degrees - fov_degrees) < 0.01:
+		return
+	fov_degrees = degrees
+	queue_redraw()
+
 func show_hitmarker(headshot: bool, killed: bool) -> void:
 	_hit_time = 0.35
 	_hit_headshot = headshot

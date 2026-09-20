@@ -7,6 +7,9 @@ var role := "host"
 var failures := 0
 var hits := 0
 var capture_path := "res://build/network-proof.png"
+## Объявления чужих смертей: при двух участниках строку киллфида показать некому
+## (убийца отфильтрует своё же имя), поэтому проверяем сам факт доставки RPC.
+var announced: Array[String] = []
 var _deadline := 0
 
 func _ready() -> void:
@@ -37,6 +40,7 @@ func _ready() -> void:
 	main.player.set_physics_process(false)
 	print("STATE [", role, "] local id=", main.player.peer_id, " pos=", main.player.position, " other id=", _other().player.peer_id, " pos=", _other().player.position)
 	main.player.weapons.hit_confirmed.connect(func(_head, _killed): hits += 1)
+	Session.net.death_announced.connect(func(victim, killer, _head): announced.append(killer + "/" + victim))
 	await get_tree().create_timer(1.0).timeout
 	_check(main.player.camera.current, "local camera remains current")
 	_check(not _other().player.camera.current, "remote camera inactive")
@@ -70,7 +74,7 @@ func _host() -> void:
 		return
 	if not await _until(func(): return main.player.health.health < 100.0, "damage received"):
 		return
-	_check(is_equal_approx(main.player.health.health, 88.75), "armor penetration preserved")
+	_check(is_equal_approx(main.player.health.health, 78.85), "armor penetration from catalog")
 	_set_flag("damage_ok")
 	if not await _until(func(): return main.deaths == 1, "death counted"):
 		return
@@ -123,13 +127,31 @@ func _client() -> void:
 		await RenderingServer.frame_post_draw
 		_check(get_viewport().get_texture().get_image().save_png(capture_path) == OK, "capture saved")
 	_set_flag("movement_ok")
-	Damage.apply(other.player, 25.0, main.player, false, 0.0)
+	# Урон проверяет жертва и отбрасывает выстрелы без прямой видимости, а спавны
+	# разнесены на полкарты. Встаём в двух метрах от цели — ровно ту линию только
+	# что проверил hitscan выше — и ждём, пока новая позиция доедет до хоста:
+	# видимость он считает по нашему реплицированному телу, а не по нашим словам.
+	main.player.global_position = other.player.global_position + Vector3(0.0, 0.0, 2.0)
+	await get_tree().create_timer(1.5).timeout
+	# Урон по чужому бойцу описывается стволом: бронепробитие жертва берёт из
+	# каталога, а не с провода, поэтому выстрел обязан быть из настоящего ствола.
+	# 25 урона АК: 25 * lerp(0.45, 1.0, 0.72) = 21.15 по здоровью.
+	Damage.apply(other.player, 25.0, main.player, false, 0.72, "ak47")
 	if not await _until(func(): return _flag("damage_ok") and hits == 1, "hit acknowledged"):
 		return
-	if not await _until(func(): return absf(other.player.health.health - 88.75) < 0.01, "health replicated"):
+	if not await _until(func(): return absf(other.player.health.health - 78.85) < 0.01, "health replicated"):
 		return
-	Damage.apply(other.player, 200.0, main.player, false, 1.0)
+	# Завышенный урон обязан быть отброшен жертвой.
+	var before: float = _other().net_health
+	NetApi.rpc_to_player(_other().replicator.get_owner_id(), _other().apply_remote_damage,
+		["glock", 999.0, true, _other().life_serial])
+	await get_tree().create_timer(1.0).timeout
+	_check(is_equal_approx(_other().net_health, before), "жертва отбросила урон 999 из глока")
+	Damage.apply(other.player, 115.0, main.player, false, 0.95, "awp")
 	if not await _until(func(): return main.kills == 1 and not other.player.health.alive, "kill and death replicated"):
+		return
+	# Смерть объявляет владелец цели: только он знает, кто именно убил.
+	if not await _until(func(): return announced.has("Test_client/Test_host"), "death announced by target owner"):
 		return
 	_check(main.player.economy.money == 1100, "kill pays once")
 	_check(not other.player._body_model.visible, "dead remote hidden")
@@ -180,9 +202,9 @@ func _client() -> void:
 func _fighters() -> Array:
 	if not is_instance_valid(main):
 		return []
-	return main.actors.get_children().filter(func(n): return n is NetPlayer)
+	return main.actors.get_children().filter(func(n): return n.has_method("apply_remote_damage"))
 
-func _other() -> NetPlayer:
+func _other() -> Node:
 	for n in _fighters():
 		if not n.player.local_control:
 			return n
@@ -212,6 +234,7 @@ func _check(ok: bool, label: String) -> void:
 
 func _fail(label: String) -> void:
 	failures += 1
+	print("FAIL BUDGET ", role, " осталось ", _deadline - Time.get_ticks_msec(), " мс из общего дедлайна")
 	for node in _fighters():
 		print("FAIL STATE ", role, " local=", node.player.local_control, " peer=", node.player.peer_id, " owner=", node.replicator.get_owner_id(), " pos=", node.player.position, " yaw=", node.player.rotation.y, " weapon=", node.weapon_id, " life=", node.life_serial, " hp=", node.net_health)
 	push_error("FAIL [" + role + "] " + label)

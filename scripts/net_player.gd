@@ -1,5 +1,7 @@
 ## Владелец симулирует бойца; остальные отображают полученное состояние.
-class_name NetPlayer
+##
+## class_name намеренно нет: файл ссылается на классы GDExtension и живёт
+## только вместе с поднятым Photon SDK.
 extends Node3D
 
 @onready var replicator: FusionSharedReplicator = $Replicator
@@ -18,6 +20,13 @@ var _world_weapon: Node3D
 var _remote_life: int = -1
 var _hand_skeleton: Skeleton3D
 var _hand_bone: int = -1
+var _last_headshot: bool = false
+
+# Бюджеты входящих RPC. Самый частый законный случай — M4A1 на 720 выстрелов в
+# минуту, то есть 12 пакетов в секунду; 20/с с запасом 30 покрывают его вместе
+# с залпом дроби и догоняющими пакетами после лага.
+var _damage_budget := RateLimiter.new(20.0, 30.0)
+var _shot_budget := RateLimiter.new(20.0, 30.0)
 
 func _ready() -> void:
 	replicator.authority_changed.connect(_on_authority_changed)
@@ -26,10 +35,12 @@ func _ready() -> void:
 	player.respawned.connect(_on_respawned)
 	player.weapons.weapon_changed.connect(_on_weapon_changed)
 	player.weapons.shot_fired.connect(_on_shot)
+	player.died.connect(_on_local_died)
+	player.health.damaged.connect(_on_local_damaged)
 	configure_owner()
 
 func configure_owner() -> void:
-	player.peer_id = Fusion.get_local_player_id() if replicator.has_authority() else replicator.get_owner_id()
+	player.peer_id = NetApi.local_player_id() if replicator.has_authority() else replicator.get_owner_id()
 	player.configure_control(replicator.has_authority())
 	player.add_to_group("combatants")
 	player.team = player.peer_id
@@ -77,28 +88,68 @@ func _on_respawned() -> void:
 	if replicator.has_authority():
 		life_serial += 1
 
+func _on_local_damaged(_amount: float, _attacker: Node, headshot: bool) -> void:
+	_last_headshot = headshot
+
+## Кто именно убил — знает только владелец цели, поэтому смерть объявляет он.
+## RPC call_remote: себе не приходит, свою смерть покажет game._on_player_died.
+func _on_local_died(attacker: Node) -> void:
+	if not replicator.has_authority() or not NetApi.is_in_room():
+		return
+	var killer := "Мир"
+	if attacker != null and is_instance_valid(attacker):
+		var label = attacker.get("display_name")
+		if label != null:
+			killer = str(label)
+	NetApi.rpc_all(announce_death, [player.display_name, killer, _last_headshot])
+
+@rpc("authority", "call_remote", "reliable")
+func announce_death(victim_name: String, killer_name: String, headshot: bool) -> void:
+	if NetApi.rpc_sender() != replicator.get_owner_id():
+		return
+	if Session.net != null:
+		Session.net.death_announced.emit(victim_name.substr(0, 24), killer_name.substr(0, 24), headshot)
+
 func _on_weapon_changed(data: WeaponData) -> void:
 	if replicator.has_authority():
 		weapon_id = String(data.id)
 
-## Sender берём из транспорта, а номер жизни отсекает урон до респавна.
+## Урон применяет владелец цели. Стрелок присылает только идентификатор ствола и
+## сумму: потолок, дистанцию и прямую видимость жертва считает сама по каталогу и
+## своей геометрии. Бронепробитие тоже берётся из каталога, а не с провода.
+## Номер жизни отсекает урон, прилетевший после респавна.
 @rpc("any_peer", "call_remote", "reliable")
-func apply_remote_damage(amount: float, headshot: bool, penetration: float, target_life: int) -> void:
+func apply_remote_damage(weapon_id_in: String, amount: float, headshot: bool, target_life: int) -> void:
 	if not replicator.has_authority() or not player.health.alive or target_life != life_serial:
 		return
-	var attacker_id: int = Fusion.get_rpc_sender()
+	var attacker_id: int = NetApi.rpc_sender()
+	if not _damage_budget.allow(attacker_id):
+		return
 	var attacker := _find_player(attacker_id)
 	if attacker == null or attacker == player or not attacker.health.alive:
 		return
-	if not is_finite(amount) or amount <= 0.0 or amount > 1000.0 or not is_finite(penetration):
+	var data := Weapons.get_weapon(StringName(weapon_id_in))
+	if data == null or not is_finite(amount) or amount <= 0.0:
 		return
-	var dealt := player.health.take_damage(amount, attacker, headshot, clampf(penetration, 0.0, 1.0))
+	# Потолок — самый жирный законный выстрел этого ствола: вся дробь в голову
+	# в упор, плюс 5 % на расхождение чисел у двух машин.
+	var cap: float = data.damage * float(maxi(data.pellets, 1)) * 1.05
+	if headshot:
+		cap *= data.headshot_multiplier
+	if amount > cap:
+		return
+	if attacker.global_position.distance_to(player.global_position) > data.max_range * 1.2:
+		return
+	if not _has_line_of_sight(attacker):
+		return
+	var dealt := player.health.take_damage(amount, attacker, headshot,
+		clampf(data.armor_penetration, 0.0, 1.0))
 	if dealt > 0.0:
-		Fusion.rpc(confirm_hit, attacker_id, headshot, not player.health.alive, life_serial)
+		NetApi.rpc_all(confirm_hit, [attacker_id, headshot, not player.health.alive, life_serial])
 
 @rpc("authority", "call_remote", "reliable")
 func confirm_hit(attacker_id: int, headshot: bool, killed: bool, victim_life: int) -> void:
-	if Fusion.get_rpc_sender() != replicator.get_owner_id():
+	if NetApi.rpc_sender() != replicator.get_owner_id():
 		return
 	var attacker := _find_player(attacker_id)
 	if attacker == null or not attacker.local_control:
@@ -112,12 +163,15 @@ func confirm_hit(attacker_id: int, headshot: bool, killed: bool, victim_life: in
 	attacker.weapons.hit_confirmed.emit(headshot, killed)
 
 func _on_shot(id: String, origin: Vector3, end: Vector3) -> void:
-	if replicator.has_authority() and Fusion.is_in_room():
-		Fusion.rpc(show_shot, id, origin, end)
+	if replicator.has_authority() and NetApi.is_in_room():
+		NetApi.rpc_all(show_shot, [id, origin, end])
 
 @rpc("authority", "call_remote", "unreliable")
 func show_shot(id: String, origin: Vector3, end: Vector3) -> void:
-	if Fusion.get_rpc_sender() != replicator.get_owner_id() or player.local_control:
+	var sender: int = NetApi.rpc_sender()
+	if sender != replicator.get_owner_id() or player.local_control:
+		return
+	if not _shot_budget.allow(sender):
 		return
 	var data := Weapons.get_weapon(StringName(id))
 	if data == null or not origin.is_finite() or not end.is_finite():
@@ -133,10 +187,27 @@ func _find_player(id: int) -> PlayerCharacter:
 			return node
 	return null
 
+## Из-за интерполяции чужое тело у нас стоит не там, где его видел стрелок,
+## поэтому целимся в три точки по высоте и довольствуемся одной свободной.
+## Маска — только мир: бойцы друг друга не заслоняют, иначе на своего же
+## союзника перед стволом урон бы не проходил.
+func _has_line_of_sight(attacker: PlayerCharacter) -> bool:
+	var space := player.get_world_3d().direct_space_state
+	var from: Vector3 = attacker.global_position + Vector3.UP * 1.55
+	for height in [1.5, 0.9, 0.3]:
+		var query := PhysicsRayQueryParameters3D.create(from, player.global_position + Vector3.UP * height)
+		query.collision_mask = 1
+		query.exclude = [attacker.get_rid(), player.get_rid()]
+		if space.intersect_ray(query).is_empty():
+			return true
+	return false
+
 func _build_world_weapon() -> void:
 	_shown_weapon = weapon_id
+	# Метод вызывается из _process; немедленный free() посреди обхода дерева —
+	# лишний риск без всякой выгоды.
 	if _world_weapon != null:
-		_world_weapon.free()
+		_world_weapon.queue_free()
 	_world_weapon = Node3D.new()
 	player.head.add_child(_world_weapon)
 	_world_weapon.position = Vector3(0.24, -0.38, -0.28)

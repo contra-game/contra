@@ -27,7 +27,11 @@ var room_name: String = "contra-city"
 var online: bool = false
 var match_seed: int = 0
 
-var net: NetManager
+const NET_MANAGER_SCRIPT := "res://scripts/net_manager.gd"
+
+## Обычный Node, а не типизированный NetManager: скрипт менеджера ссылается на
+## классы GDExtension и не компилируется без установленного Photon SDK.
+var net: Node = null
 
 ## Активный seed принимают и поздно подключившиеся игроки.
 var _seen_seed: int = 0
@@ -36,7 +40,10 @@ var last_error: String = ""
 
 func _ready() -> void:
 	load_settings()
-	net = NetManager.new()
+	if not NetApi.available():
+		print("[сеть] Photon SDK не поднялся — доступен только офлайн-режим")
+		return
+	net = (load(NET_MANAGER_SCRIPT) as GDScript).new()
 	net.name = "NetManager"
 	add_child(net)
 	net.session_state.connect(_on_net_state)
@@ -55,6 +62,8 @@ func user_id() -> String:
 	return "%s#%04d" % [player_name, randi() % 10000]
 
 func connect_and_join() -> bool:
+	if net == null:
+		return false
 	# Photon цепляет свои узлы к дереву, поэтому подключаться из _ready нельзя:
 	# сцена в этот момент ещё «занята» и add_child падает.
 	await get_tree().process_frame
@@ -65,10 +74,13 @@ func connect_and_join() -> bool:
 func leave() -> void:
 	print("[сессия] выход из комнаты")
 	_watching = false
-	net.stop()
+	if net != null:
+		net.stop()
 
 func players() -> Array:
 	var out: Array = []
+	if net == null:
+		return out
 	for player in net.players():
 		var row := LobbyPlayer.new()
 		row.id = player.get_number()
@@ -78,10 +90,10 @@ func players() -> Array:
 	return out
 
 func is_host() -> bool:
-	return net.is_host()
+	return net != null and net.is_host()
 
 func is_online() -> bool:
-	return net.is_online()
+	return net != null and net.is_online()
 
 # --- старт матча -------------------------------------------------------------
 
@@ -89,15 +101,13 @@ func is_online() -> bool:
 ## соберётся разная. Широковещательный RPC тут не годится — Fusion шлёт их
 ## только от узлов с репликатором, а сессия живёт вне сетевого дерева.
 func start_match() -> void:
-	if not net.is_online() or not is_host() or match_seed != 0:
+	if not is_online() or not is_host() or match_seed != 0:
 		return
 	# Photon хранит целые свойства комнаты как signed int32.
 	var seed_value := randi() & 0x7fffffff
 	if seed_value == 0:
 		seed_value = 1
-	var room := Fusion.get_room() if net.is_online() else null
-	if room != null:
-		room.set_property(SEED_KEY, seed_value)
+	NetApi.set_room_property(SEED_KEY, seed_value)
 	_apply_start(seed_value)
 
 func _apply_start(seed_value: int) -> void:
@@ -105,21 +115,16 @@ func _apply_start(seed_value: int) -> void:
 		return
 	print("[сессия] старт матча, seed=%d" % seed_value)
 	_watching = false
+	_seen_seed = seed_value
 	match_seed = seed_value
-	online = net.is_online()
+	online = is_online()
 	match_started.emit(seed_value)
 
 ## Пока сидим в лобби, ждём, когда хост положит в комнату новый seed.
 func _process(_delta: float) -> void:
-	if not _watching or not net.is_online():
+	if not _watching or not is_online():
 		return
-	var room := Fusion.get_room()
-	if room == null:
-		return
-	var props := room.get_custom_properties()
-	if not props.has(SEED_KEY):
-		return
-	var value := int(props[SEED_KEY])
+	var value := int(NetApi.room_property(SEED_KEY, 0))
 	if value != 0 and value != _seen_seed:
 		_apply_start(value)
 
@@ -170,5 +175,12 @@ func load_settings() -> void:
 	var config := ConfigFile.new()
 	if config.load(SETTINGS_PATH) != OK:
 		return
-	player_name = str(config.get_value("player", "name", player_name))
-	room_name = str(config.get_value("player", "room", room_name))
+	player_name = _sanitize(str(config.get_value("player", "name", player_name)), 20, "Игрок")
+	room_name = _sanitize(str(config.get_value("player", "room", room_name)), 24, "contra-city")
+
+## Файл настроек лежит у пользователя и правится руками — доверять ему нельзя.
+func _sanitize(value: String, limit: int, fallback: String) -> String:
+	var text := value.replace("#", "").strip_edges()
+	if text.length() > limit:
+		text = text.substr(0, limit)
+	return text if text != "" else fallback

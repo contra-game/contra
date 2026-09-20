@@ -61,6 +61,8 @@ var _step_accum: float = 0.0
 var _land_kick: float = 0.0
 var _input_dir := Vector2.ZERO
 var _wants_jump: bool = false
+## Битовая маска того, от чего зависит внешний вид: жив / свой / есть модель.
+var _visual_state: int = -1
 
 func _ready() -> void:
 	# Форма коллайдера общая для всех инстансов сцены — копируем под себя.
@@ -76,13 +78,15 @@ func _ready() -> void:
 	configure_control(local_control)
 
 ## Вызывается и после сетевого спавна: дочерний _ready раньше родительского.
+## Режимом мыши здесь не управляем — этот метод переспрашивается при смене
+## авторитета (уход хоста), и захват перебивал бы открытую паузу или магазин.
+## Мышь берут те, кто знает состояние экрана: game при спавне и hud в паузе.
 func configure_control(mine: bool) -> void:
 	local_control = mine
 	if _capsule == null:
 		return
 	if mine:
 		camera.make_current()
-		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	elif camera.current:
 		camera.clear_current()
 	if not mine and _body_model == null:
@@ -90,7 +94,14 @@ func configure_control(mine: bool) -> void:
 	weapons.set_local_visuals(mine)
 	update_life_visuals()
 
+## Зовётся каждый кадр для чужих бойцов, поэтому пересчитываем только на смене
+## состояния: set_deferred на каждом кадре — лишняя очередь вызовов на каждого
+## бойца в комнате.
 func update_life_visuals() -> void:
+	var state := (1 if health.alive else 0) | (2 if local_control else 0) | (4 if _body_model != null else 0)
+	if state == _visual_state:
+		return
+	_visual_state = state
 	body_mesh.visible = not local_control and health.alive and _body_model == null
 	if _body_model != null:
 		_body_model.visible = not local_control and health.alive
@@ -142,13 +153,18 @@ func _read_input() -> void:
 		sprinting = false
 		return
 	_input_dir = Input.get_vector("move_left", "move_right", "move_forward", "move_back")
-	_wants_jump = Input.is_action_pressed("jump")
+	# Прыжок копится по новому нажатию и тратится при касании земли: зажатый
+	# пробел больше не даёт бесконечный банихоп, но нажатие в воздухе
+	# срабатывает при посадке — так привычнее.
+	if Input.is_action_just_pressed("jump"):
+		_wants_jump = true
 	sprinting = Input.is_action_pressed("sprint") and not crouching and _input_dir.y < 0.0
 
 func _apply_gravity(delta: float) -> void:
 	if is_on_floor():
 		if _wants_jump:
 			velocity.y = jump_velocity
+			_wants_jump = false
 		else:
 			velocity.y = -0.1
 	else:
@@ -280,6 +296,7 @@ func respawn(at: Transform3D) -> void:
 	look_yaw = at.basis.get_euler().y
 	look_pitch = 0.0
 	velocity = Vector3.ZERO
+	_wants_jump = false
 	_recoil = Vector2.ZERO
 	_recoil_target = Vector2.ZERO
 	health.reset()

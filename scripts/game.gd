@@ -20,7 +20,9 @@ const BOT_SCENE := preload("res://scenes/bot.tscn")
 @onready var hud: Hud = $Hud
 
 var player: PlayerCharacter
-var net: NetManager
+## Обычный Node, а не типизированный менеджер: его скрипт ссылается на классы
+## GDExtension и не компилируется без установленного Photon SDK.
+var net: Node
 var kills: int = 0
 var deaths: int = 0
 
@@ -28,8 +30,11 @@ var _rng := RandomNumberGenerator.new()
 
 func _ready() -> void:
 	# Режим и seed приходят из сессии: в сети карта должна собраться одинаковой
-	# у всех, поэтому seed раздаёт хост, а не константа матча.
-	online = Session.online
+	# у всех, поэтому seed раздаёт хост, а не константа матча. Флаг считается
+	# один раз и по факту живого соединения: если связь отвалилась между лобби и
+	# матчем, матч должен быть полностью офлайновым, иначе точки оружия ждут
+	# хоста, которого нет, а счёт пишется в узел без сетевой обвязки.
+	online = Session.online and Session.is_online()
 	if Session.match_seed != 0:
 		match_seed = Session.match_seed
 	print("[матч] режим=%s seed=%d ботов=%d" % [
@@ -38,7 +43,7 @@ func _ready() -> void:
 	map.build(match_seed)
 	_spawn_pickups()
 
-	if online and Session.is_online():
+	if online:
 		_bind_network()
 		# В сети бойцов нет кроме живых игроков: бот был бы локальным у каждого
 		# клиента, то есть невидимым для остальных, и счёт по нему бы разъезжался.
@@ -59,6 +64,8 @@ func _bind_network() -> void:
 	if not net.remote_player_spawned.is_connected(_on_remote_player_spawned):
 		net.remote_player_spawned.connect(_on_remote_player_spawned)
 	net.kill_confirmed.connect(_on_network_kill)
+	if not net.death_announced.is_connected(_on_death_announced):
+		net.death_announced.connect(_on_death_announced)
 
 func _on_session_state(text: String) -> void:
 	killfeed.emit(text)
@@ -78,6 +85,7 @@ func _on_local_player_spawned(node: Node) -> void:
 	player.died.connect(_on_player_died)
 	player.weapons.hit_confirmed.connect(_on_player_hit)
 	hud.bind(self, player)
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 # --- спавны ------------------------------------------------------------------
 
@@ -91,6 +99,7 @@ func _spawn_player() -> void:
 	player.died.connect(_on_player_died)
 	player.weapons.hit_confirmed.connect(_on_player_hit)
 	hud.bind(self, player)
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 func _spawn_bots(count: int) -> void:
 	for i in count:
@@ -195,10 +204,21 @@ func _network_spawn(initial: bool) -> Transform3D:
 	return best
 
 func _on_network_kill(victim_name: String, _headshot: bool) -> void:
+	# Подтверждение может прийти раньше, чем Photon отдал нам своего бойца.
+	if player == null or not is_instance_valid(player):
+		return
 	kills += 1
 	player.get_parent().frags = kills
 	score_changed.emit(kills, deaths)
 	killfeed.emit("Вы убили %s" % victim_name)
+
+## Своё убийство уже показал kill_confirmed, поэтому строки от своего имени
+## пропускаем. Тёзки в одной комнате потеряют одну строку — терпимо, имена в
+## Photon не уникальны и сравнивать больше нечего.
+func _on_death_announced(victim_name: String, killer_name: String, headshot: bool) -> void:
+	if player != null and is_instance_valid(player) and killer_name == player.display_name:
+		return
+	killfeed.emit("%s убил %s%s" % [killer_name, victim_name, " в голову" if headshot else ""])
 
 func _on_bot_died(attacker: Node, bot: Bot) -> void:
 	if attacker == player:
@@ -215,7 +235,9 @@ func _name_of(node: Node) -> String:
 	if node == null or not is_instance_valid(node):
 		return "Мир"
 	var label = node.get("display_name")
-	return str(label) if label != null else node.name
+	var text: String = str(label) if label != null else String(node.name)
+	# Имя чужого бойца реплицируется его клиентом: при показе режем длину.
+	return text.substr(0, 24)
 
 ## Деньги начисляются за фактическое убийство, а не за факт смерти цели:
 ## так добивание чужой цели не оплачивается.

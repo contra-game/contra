@@ -79,6 +79,7 @@ func _process(delta: float) -> void:
 		_center_label.text = "Вы убиты\nВозрождение через %.1f" % _respawn_left
 	_damage_flash.modulate.a = lerpf(_damage_flash.modulate.a, 0.0, delta * 3.5)
 	if player != null and player.weapons != null:
+		_crosshair.set_fov(player.camera.fov)
 		_hint_label.visible = player.weapons.reloading
 		_hint_label.text = "ПЕРЕЗАРЯДКА"
 
@@ -97,12 +98,20 @@ func _build_scoreboard() -> void:
 func _refresh_scoreboard() -> void:
 	var rows: Array[String] = []
 	if Session.online:
-		rows.append("%s  •  %d игроков  •  %d мс" % [Session.room_name, Session.players().size(), int(Fusion.get_rtt() * 1000.0)])
+		rows.append("%s  •  %d игроков  •  %d мс" % [
+			Session.room_name, Session.players().size(), int(NetApi.rtt() * 1000.0)])
 		rows.append("ИГРОК                         ФРАГИ / СМЕРТИ")
 		for actor in get_tree().get_nodes_in_group("combatants"):
-			if actor is PlayerCharacter and actor.get_parent() is NetPlayer:
-				var wrapper: NetPlayer = actor.get_parent()
-				rows.append("%s%s        %d / %d" % [actor.display_name, " (вы)" if actor.local_control else "", wrapper.frags, wrapper.deaths])
+			if not actor is PlayerCharacter:
+				continue
+			# Обвязку узнаём по методу, а не по классу: её скрипт не существует
+			# без Photon SDK, а табло должно открываться и офлайн.
+			var wrapper: Node = actor.get_parent()
+			if wrapper == null or not wrapper.has_method("apply_remote_damage"):
+				continue
+			rows.append("%s%s        %d / %d" % [
+				actor.display_name.substr(0, 24), " (вы)" if actor.local_control else "",
+				wrapper.frags, wrapper.deaths])
 	elif game != null:
 		rows.append("Тренировка\n%s        %d / %d" % [Session.player_name, game.kills, game.deaths])
 	_score_rows.text = "\n\n".join(rows)
@@ -265,8 +274,13 @@ func push_killfeed(text: String) -> void:
 	var label := _make_label(text, 16, Color(0.86, 0.88, 0.9))
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_killfeed.add_child(label)
+	# Твин, который гасит метку, держит на неё ссылку; немедленный free()
+	# оставляет твин с освобождённой целью. Снимаем с дерева сразу, чтобы лишняя
+	# метка не участвовала в подсчёте до конца кадра.
 	while _killfeed.get_child_count() > 5:
-		_killfeed.get_child(0).free()
+		var oldest := _killfeed.get_child(0)
+		_killfeed.remove_child(oldest)
+		oldest.queue_free()
 	var tween := create_tween()
 	tween.tween_interval(4.5)
 	tween.tween_property(label, "modulate:a", 0.0, 0.6)

@@ -55,8 +55,6 @@ func set_available(value: bool) -> void:
 		_model.visible = value
 
 func _restore() -> void:
-	if not is_instance_valid(self):
-		return
 	_available = true
 	if _model != null:
 		_model.visible = true

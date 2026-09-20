@@ -25,6 +25,7 @@ enum State { IDLE, PATROL, CHASE, ATTACK, DEAD }
 
 @onready var health: Health = $Health
 @onready var mesh_root: Node3D = $Mesh
+@onready var collider: CollisionShape3D = $Collider
 
 var state: State = State.IDLE
 var target: Node3D = null
@@ -50,6 +51,7 @@ func _ready() -> void:
 	health.died.connect(_on_died)
 	health.damaged.connect(_on_damaged)
 	_build_visual()
+	_update_life_state()
 
 func _physics_process(delta: float) -> void:
 	# Поведение считает только сервер: клиенты получат результат по сети.
@@ -227,7 +229,7 @@ func _shoot(delta: float) -> void:
 	var amount := _data.damage_at(origin.distance_to(hit.position))
 	if headshot:
 		amount *= _data.headshot_multiplier
-	Damage.apply(body, amount, self, headshot, _data.armor_penetration)
+	Damage.apply(body, amount, self, headshot, _data.armor_penetration, String(_data.id))
 
 func _tick_reload(delta: float) -> void:
 	if _reload_left <= 0.0:
@@ -265,7 +267,7 @@ func _avoid_obstacles(dir: Vector3) -> Vector3:
 
 func _blocked(space: PhysicsDirectSpaceState3D, origin: Vector3, dir: Vector3, distance: float) -> bool:
 	var query := PhysicsRayQueryParameters3D.create(origin, origin + dir * distance)
-	query.collision_mask = 1
+	query.collision_mask = 1 | 4          # мир и другие боты
 	query.exclude = [get_rid()]
 	return not space.intersect_ray(query).is_empty()
 
@@ -304,6 +306,7 @@ func _on_damaged(_amount: float, attacker: Node, _headshot: bool) -> void:
 func _on_died(attacker: Node) -> void:
 	state = State.DEAD
 	velocity = Vector3.ZERO
+	_update_life_state()
 	Sfx.play_3d(&"death", global_position, randf_range(0.85, 1.15))
 	var tween := create_tween()
 	tween.tween_property(mesh_root, "rotation:x", deg_to_rad(-85.0), 0.35)
@@ -318,6 +321,19 @@ func respawn(at: Transform3D) -> void:
 	_mag = _data.magazine if _data != null else 30
 	_reload_left = 0.0
 	health.reset()
+	_update_life_state()
+
+## Труп не должен ловить пули и мешать ходить. У игрока это уже так
+## (player.gd, update_life_visuals), у бота коллайдер оставался включённым весь
+## респавн: выстрел в корпус глотался кровавыми искрами вместо урона.
+func _update_life_state() -> void:
+	var alive := health.alive
+	collision_layer = 4 if alive else 0
+	collider.set_deferred("disabled", not alive)
+
+## Спрашивает game._network_spawn у всех бойцов в группе combatants.
+func is_dead() -> bool:
+	return not health.alive
 
 ## Внешний вид: модель бойца, если ассеты на месте, иначе капсулы из сцены,
 ## покрашенные по команде.
