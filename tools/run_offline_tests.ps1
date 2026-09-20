@@ -12,6 +12,9 @@ $parked = Join-Path $projectPath 'addons/_fusion_parked'
 function Invoke-Scene([string]$scene, [string]$name) {
     $arguments = @('--headless', '--path', ('"' + $projectPath + '"'), $scene)
     $process = Start-Process -FilePath $enginePath -ArgumentList $arguments -WorkingDirectory (Split-Path $enginePath -Parent) -WindowStyle Hidden -PassThru -RedirectStandardOutput "$logPath/$name.log" -RedirectStandardError "$logPath/$name.err"
+    # Обращение к Handle кэширует хэндл процесса: без него .NET не заполняет
+    # ExitCode после WaitForExit(), и код возврата приходит пустым.
+    $null = $process.Handle
     $process.WaitForExit()
     $code = $process.ExitCode
     $process.Dispose()
