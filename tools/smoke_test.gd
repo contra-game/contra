@@ -68,6 +68,22 @@ func _report() -> void:
 	print("боты: всего=%d живых=%d в бою=%d движутся=%d на земле=%d" % [
 		bots.size(), alive, fighting, moved, grounded])
 
+	if not bots.is_empty():
+		var sample: Bot = bots[0]
+		var player_node: AnimationPlayer = null
+		for node in sample.get_node("Mesh").get_children():
+			player_node = node.get_node_or_null("AnimationPlayer")
+			if player_node != null:
+				break
+		if player_node == null:
+			print("модель бойца: анимаций нет (модель не собралась)")
+		else:
+			print("модель бойца: анимации=%s, играет=%s, дорожек в idle=%d" % [
+				str(player_node.get_animation_list()), player_node.current_animation,
+				player_node.get_animation("idle").get_track_count() if player_node.has_animation("idle") else -1])
+			if player_node.has_animation("idle"):
+				print("первая дорожка idle: %s" % str(player_node.get_animation("idle").track_get_path(0)))
+
 	# Урон идёт через ту же точку входа, что и выстрелы.
 	if not bots.is_empty():
 		var victim: Bot = bots[0]
@@ -81,6 +97,9 @@ func _report() -> void:
 	var gave: bool = player.weapons.give(&"awp", true)
 	print("выдача AWP: %s, в руках=%s, патроны=%s" % [
 		str(gave), player.weapons.current_data().display_name, player.weapons.ammo_text()])
+	print("экономика: денег=%d, AK стоит %d, хватает=%s" % [
+		player.economy.money, Weapons.get_weapon(&"ak47").price,
+		str(player.economy.can_afford(Weapons.get_weapon(&"ak47").price))])
 	print("звук выстрела AK: %s" % ("записанный wav" if ResourceLoader.exists("res://assets/sfx/weapons/ak47_1.wav") else "синтез"))
 	print("выживаемость неподвижного игрока (hp/броня): %s" % ", ".join(_timeline))
 	print("--- END ---")

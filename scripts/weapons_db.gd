@@ -6,25 +6,27 @@ var _catalog: Dictionary = {}
 
 func _ready() -> void:
 	_register(_make({
-		"id": &"ak47", "name": "AK-47", "slot": WeaponData.Slot.PRIMARY,
+		"id": &"ak47", "name": "AK-47", "slot": WeaponData.Slot.PRIMARY, "price": 2700,
 		"mode": WeaponData.FireMode.AUTO,
 		"damage": 33.0, "hs": 4.0, "pen": 0.72, "rpm": 600.0,
 		"mag": 30, "reserve": 90, "reload": 2.4,
 		"spread_base": 0.32, "per_shot": 0.38, "max_spread": 7.0,
 		"recoil_up": 1.25, "recoil_side": 0.5,
 		"color": Color(0.35, 0.22, 0.12), "length": 0.66, "pitch": 0.95,
+		"model": "res://assets/weapons/Rifle.fbx",
 	}))
 	_register(_make({
-		"id": &"m4", "name": "M4A1", "slot": WeaponData.Slot.PRIMARY,
+		"id": &"m4", "name": "M4A1", "slot": WeaponData.Slot.PRIMARY, "price": 3100,
 		"mode": WeaponData.FireMode.AUTO,
 		"damage": 28.0, "hs": 4.0, "pen": 0.68, "rpm": 720.0,
 		"mag": 30, "reserve": 90, "reload": 2.2,
 		"spread_base": 0.26, "per_shot": 0.3, "max_spread": 6.0,
 		"recoil_up": 0.95, "recoil_side": 0.36,
 		"color": Color(0.16, 0.17, 0.18), "length": 0.62, "pitch": 1.08,
+		"model": "res://assets/weapons/P90.fbx",
 	}))
 	_register(_make({
-		"id": &"spas", "name": "SPAS-12", "slot": WeaponData.Slot.PRIMARY,
+		"id": &"spas", "name": "SPAS-12", "slot": WeaponData.Slot.PRIMARY, "price": 1800,
 		"mode": WeaponData.FireMode.SEMI,
 		"damage": 13.0, "hs": 2.0, "pen": 0.5, "rpm": 95.0,
 		"mag": 8, "reserve": 32, "reload": 3.2,
@@ -32,9 +34,10 @@ func _ready() -> void:
 		"spread_base": 2.6, "per_shot": 0.6, "max_spread": 6.0,
 		"recoil_up": 3.4, "recoil_side": 0.9,
 		"color": Color(0.22, 0.14, 0.1), "length": 0.7, "pitch": 0.7,
+		"model": "res://assets/weapons/Shotgun.fbx",
 	}))
 	_register(_make({
-		"id": &"awp", "name": "AWP", "slot": WeaponData.Slot.PRIMARY,
+		"id": &"awp", "name": "AWP", "slot": WeaponData.Slot.PRIMARY, "price": 4750,
 		"mode": WeaponData.FireMode.BOLT,
 		"damage": 115.0, "hs": 2.2, "pen": 0.95, "rpm": 41.0,
 		"mag": 5, "reserve": 25, "reload": 3.5,
@@ -42,10 +45,11 @@ func _ready() -> void:
 		"spread_base": 0.1, "per_shot": 3.0, "max_spread": 9.0,
 		"aim_mult": 0.02, "recoil_up": 4.5, "recoil_side": 0.6,
 		"color": Color(0.1, 0.18, 0.12), "length": 0.95, "scope": true,
+		"model": "res://assets/weapons/SniperRifle.fbx",
 		"aim_fov": 18.0, "speed": 0.82, "pitch": 0.6,
 	}))
 	_register(_make({
-		"id": &"deagle", "name": "Deagle", "slot": WeaponData.Slot.SECONDARY,
+		"id": &"deagle", "name": "Deagle", "slot": WeaponData.Slot.SECONDARY, "price": 700,
 		"mode": WeaponData.FireMode.SEMI,
 		"damage": 54.0, "hs": 3.2, "pen": 0.8, "rpm": 260.0,
 		"mag": 7, "reserve": 35, "reload": 2.1,
@@ -53,9 +57,10 @@ func _ready() -> void:
 		"spread_base": 0.35, "per_shot": 1.2, "max_spread": 8.0,
 		"recoil_up": 2.6, "recoil_side": 0.7,
 		"color": Color(0.5, 0.42, 0.2), "length": 0.3, "speed": 1.08, "pitch": 0.8,
+		"model": "res://assets/weapons/Revolver.fbx",
 	}))
 	_register(_make({
-		"id": &"glock", "name": "Glock-18", "slot": WeaponData.Slot.SECONDARY,
+		"id": &"glock", "name": "Glock-18", "slot": WeaponData.Slot.SECONDARY, "price": 200,
 		"mode": WeaponData.FireMode.SEMI,
 		"damage": 22.0, "hs": 3.4, "pen": 0.45, "rpm": 400.0,
 		"mag": 20, "reserve": 60, "reload": 1.9,
@@ -63,6 +68,7 @@ func _ready() -> void:
 		"spread_base": 0.5, "per_shot": 0.7, "max_spread": 7.0,
 		"recoil_up": 1.2, "recoil_side": 0.5,
 		"color": Color(0.14, 0.14, 0.16), "length": 0.26, "speed": 1.1, "pitch": 1.2,
+		"model": "res://assets/weapons/Pistol.fbx",
 	}))
 
 func get_weapon(id: StringName) -> WeaponData:
@@ -112,4 +118,11 @@ func _make(d: Dictionary) -> WeaponData:
 	w.aim_fov = d.get("aim_fov", 55.0)
 	w.move_speed_mult = d.get("speed", 1.0)
 	w.shot_pitch = d.get("pitch", 1.0)
+	w.model_path = d.get("model", "")
+	w.model_scale = d.get("model_scale", 1.0)
+	w.model_offset = d.get("model_offset", Vector3.ZERO)
+	w.model_rotation = d.get("model_rotation", Vector3.ZERO)
+	w.anim_fire = d.get("fire_anim", "")
+	w.anim_reload = d.get("reload_anim", "")
+	w.price = d.get("price", 0)
 	return w

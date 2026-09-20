@@ -8,6 +8,11 @@ const WARMUP := 1.2
 func _ready() -> void:
 	var main: Node = load("res://scenes/main.tscn").instantiate()
 	add_child(main)
+	# Боты замораживаются, иначе к моменту съёмки игрок обычно уже убит
+	# и оружие убрано в кобуру.
+	for node in main.get_node("Actors").get_children():
+		if node is Bot:
+			node.set_physics_process(false)
 	await get_tree().create_timer(WARMUP).timeout
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
@@ -23,6 +28,24 @@ func _ready() -> void:
 	overview.look_at(Vector3.ZERO, Vector3.UP)
 	overview.current = true
 	await _shoot("res://tools/shot_map.png")
+
+	# Кадр магазина: событие отправляется как настоящее нажатие B.
+	var buy := InputEventAction.new()
+	buy.action = "buy"
+	buy.pressed = true
+	Input.parse_input_event(buy)
+	await get_tree().process_frame
+	await _shoot("res://tools/shot_shop.png")
+	Input.parse_input_event(buy)
+	await get_tree().process_frame
+
+	# Третий кадр — крупный план бойца, чтобы видеть модель и анимацию.
+	for node in main.get_node("Actors").get_children():
+		if node is Bot:
+			overview.global_position = node.global_position + Vector3(2.2, 1.6, 2.2)
+			overview.look_at(node.global_position + Vector3.UP * 0.9, Vector3.UP)
+			await _shoot("res://tools/shot_bot.png")
+			break
 
 	get_tree().quit()
 

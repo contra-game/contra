@@ -39,6 +39,9 @@ var _trigger_held: bool = false
 var _holstered: bool = false
 var _sway := Vector2.ZERO
 var _kick: float = 0.0
+var _anim: AnimationPlayer
+var _fire_anim: String = ""
+var _reload_anim: String = ""
 
 func setup(body: Node3D, camera: Camera3D, pivot: Node3D) -> void:
 	_owner = body
@@ -100,14 +103,16 @@ func player_tick(delta: float, state: Dictionary) -> void:
 	_update_view_model(delta, state)
 
 func _read_weapon_input(state: Dictionary) -> void:
-	if Input.is_action_just_pressed("slot_1"):
-		_equip(0, false)
-	elif Input.is_action_just_pressed("slot_2"):
-		_equip(1, false)
-	elif Input.is_action_just_pressed("slot_next"):
-		_equip((current_slot + 1) % SLOT_COUNT, false)
-	elif Input.is_action_just_pressed("slot_prev"):
-		_equip((current_slot + SLOT_COUNT - 1) % SLOT_COUNT, false)
+	# Цифры при открытом магазине тратятся на покупку.
+	if not _owner.get("shop_open"):
+		if Input.is_action_just_pressed("slot_1"):
+			_equip(0, false)
+		elif Input.is_action_just_pressed("slot_2"):
+			_equip(1, false)
+		elif Input.is_action_just_pressed("slot_next"):
+			_equip((current_slot + 1) % SLOT_COUNT, false)
+		elif Input.is_action_just_pressed("slot_prev"):
+			_equip((current_slot + SLOT_COUNT - 1) % SLOT_COUNT, false)
 
 	if Input.is_action_just_pressed("reload"):
 		start_reload()
@@ -157,6 +162,9 @@ func _try_fire(state: Dictionary) -> void:
 
 	Sfx.play_shot(data.id, _muzzle_position(), data.shot_pitch)
 	Effects.muzzle_flash(_pivot, Vector3(0, 0, -data.length))
+	# Анимация выстрела ужимается под скорострельность, иначе на автомате
+	# она не успевает доиграть и ствол «залипает».
+	_play_anim(_fire_anim, minf(_cooldown * 0.95, 0.35))
 
 	if data.fire_mode == WeaponData.FireMode.BOLT:
 		_cooldown = maxf(_cooldown, 1.25)
@@ -332,13 +340,34 @@ func ammo_text() -> String:
 
 # --- вид от первого лица -----------------------------------------------------
 
-## Модель оружия собирается из примитивов: отдельных мешей под каждый ствол
-## пока нет, а силуэт и длина читаются из WeaponData.
+## Модель оружия: анимированная из пака, если она указана в WeaponData,
+## иначе силуэт из примитивов по длине ствола.
 func _build_view_model(data: WeaponData) -> void:
 	if _view_model != null:
 		_view_model.queue_free()
 	_view_model = Node3D.new()
 	_pivot.add_child(_view_model)
+	_anim = null
+
+	if data.model_path != "" and ResourceLoader.exists(data.model_path):
+		var scene: PackedScene = load(data.model_path)
+		var model := scene.instantiate() as Node3D
+		if model != null:
+			_view_model.add_child(model)
+			ViewModel.fit(model, data)
+			_anim = _find_animation_player(model)
+			_fire_anim = _resolve_anim(data.anim_fire, ["FireWBullet", "Fire"])
+			_reload_anim = _resolve_anim(data.anim_reload, ["Reload"])
+			for node in _walk(model):
+				if node is GeometryInstance3D:
+					node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			_view_model.position = HIP_POSITION
+			_view_model.rotation = Vector3(0.0, -0.07, 0.0)
+			return
+
+	_build_primitive_model(data)
+
+func _build_primitive_model(data: WeaponData) -> void:
 
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = data.body_color
@@ -404,7 +433,51 @@ func _update_view_model(delta: float, state: Dictionary) -> void:
 	_view_model.position = _view_model.position.lerp(target_pos, t)
 	_view_model.rotation = _view_model.rotation.lerp(target_rot, t)
 
+func _find_animation_player(root: Node) -> AnimationPlayer:
+	for node in _walk(root):
+		if node is AnimationPlayer:
+			return node
+	return null
+
+## Имена анимаций в паках идут с префиксом арматуры ("RifleArmature|Reload"),
+## причём у одной модели префикс даже с пробелом. Поэтому ищем по подстроке,
+## а не по точному совпадению; явное имя в WeaponData имеет приоритет.
+func _resolve_anim(override: String, keywords: Array) -> String:
+	if _anim == null:
+		return ""
+	var available := _anim.get_animation_list()
+	if override != "" and available.has(override):
+		return override
+	for keyword in keywords:
+		for name in available:
+			if name.containsn(keyword):
+				return name
+	return ""
+
+func _walk(node: Node) -> Array[Node]:
+	var out: Array[Node] = [node]
+	for child in node.get_children():
+		out.append_array(_walk(child))
+	return out
+
+## speed < 0 — подогнать анимацию под заданную длительность.
+func _play_anim(anim_name: String, duration: float) -> bool:
+	if _anim == null or anim_name == "":
+		return false
+	var anim := _anim.get_animation(anim_name)
+	if anim == null:
+		return false
+	_anim.stop()
+	if duration > 0.0:
+		_anim.speed_scale = anim.length / duration
+	else:
+		_anim.speed_scale = 1.0
+	_anim.play(anim_name)
+	return true
+
 func _animate_reload(duration: float) -> void:
+	if _play_anim(_reload_anim, duration):
+		return
 	if _view_model == null:
 		return
 	var tween := _view_model.create_tween()

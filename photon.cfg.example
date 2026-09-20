@@ -1,0 +1,6 @@
+; Скопировать в photon.cfg и вписать свой App ID из dashboard.photonengine.com
+; (тип приложения — Fusion). photon.cfg в git не попадает.
+[photon]
+
+app_id=""
+region="eu"

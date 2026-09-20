@@ -11,3 +11,6 @@ assets/raw/
 # Кадры, которые делает tools/screenshot.tscn
 tools/*.png
 tools/*.png.import
+
+# App ID Photon: свой у каждого, в публичный репозиторий не кладётся
+photon.cfg

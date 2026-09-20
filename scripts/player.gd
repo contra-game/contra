@@ -39,10 +39,13 @@ const CROUCH_EYE := 1.05
 @onready var body_mesh: MeshInstance3D = $Body
 @onready var health: Health = $Health
 @onready var weapons: WeaponManager = $WeaponManager
+@onready var economy: Economy = $Economy
 
 var look_yaw: float = 0.0
 var look_pitch: float = 0.0
 var crouching: bool = false
+## Пока открыт магазин, цифровые клавиши уходят на покупку.
+var shop_open: bool = false
 var sprinting: bool = false
 var base_fov: float = 85.0
 

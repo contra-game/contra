@@ -48,6 +48,7 @@ func _spawn_player() -> void:
 	actors.add_child(player)
 	player.global_transform = _pick(map.player_spawns)
 	player.died.connect(_on_player_died)
+	player.weapons.hit_confirmed.connect(_on_player_hit)
 
 func _spawn_bots() -> void:
 	for i in bot_count:
@@ -108,6 +109,7 @@ func _pick(points: Array[Transform3D]) -> Transform3D:
 
 func _on_player_died(attacker: Node) -> void:
 	deaths += 1
+	player.economy.award_death()
 	score_changed.emit(kills, deaths)
 	killfeed.emit("%s убил вас" % _name_of(attacker))
 	get_tree().create_timer(respawn_delay).timeout.connect(_respawn_player)
@@ -133,3 +135,9 @@ func _name_of(node: Node) -> String:
 		return "Мир"
 	var label = node.get("display_name")
 	return str(label) if label != null else node.name
+
+## Деньги начисляются за фактическое убийство, а не за факт смерти цели:
+## так добивание чужой цели не оплачивается.
+func _on_player_hit(headshot: bool, killed: bool) -> void:
+	if killed and player != null:
+		player.economy.award_kill(headshot)

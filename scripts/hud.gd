@@ -20,6 +20,8 @@ var _center_label: Label
 var _killfeed: VBoxContainer
 var _damage_flash: ColorRect
 var _pause_panel: PanelContainer
+var _shop: Shop
+var _money_label: Label
 var _paused: bool = false
 var _respawn_left: float = 0.0
 
@@ -31,6 +33,7 @@ func _ready() -> void:
 	_build_killfeed()
 	_build_center()
 	_build_pause()
+	_build_shop()
 
 func bind(game_node: Node, player_node: PlayerCharacter) -> void:
 	game = game_node
@@ -45,6 +48,9 @@ func bind(game_node: Node, player_node: PlayerCharacter) -> void:
 	player.weapons.hit_confirmed.connect(_on_hit_confirmed)
 	player.health.damaged.connect(_on_damaged)
 
+	_shop.bind(player_node, player_node.economy)
+	player.economy.money_changed.connect(_on_money_changed)
+	_on_money_changed(player.economy.money)
 	game.score_changed.connect(_on_score_changed)
 	game.killfeed.connect(push_killfeed)
 
@@ -224,3 +230,31 @@ func toggle_pause() -> void:
 	_pause_panel.visible = _paused
 	get_tree().paused = _paused
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if _paused else Input.MOUSE_MODE_CAPTURED
+
+# --- магазин -----------------------------------------------------------------
+
+func _build_shop() -> void:
+	_shop = Shop.new()
+	add_child(_shop)
+
+	_money_label = _make_label("$800", 26, Color(0.55, 0.85, 0.5))
+	_money_label.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	_money_label.position = Vector2(34, -130)
+	add_child(_money_label)
+
+func _on_money_changed(amount: int) -> void:
+	_money_label.text = "$%d" % amount
+
+## Клавиши магазина перехватываются здесь: пока он открыт, цифры покупают.
+func _unhandled_input(event: InputEvent) -> void:
+	if event.is_action_pressed("buy"):
+		if player != null and not player.is_dead():
+			_shop.toggle()
+		get_viewport().set_input_as_handled()
+		return
+	if not _shop.visible or not event is InputEventKey or not event.pressed or event.echo:
+		return
+	var key := event as InputEventKey
+	var digit := key.physical_keycode - KEY_1
+	if digit >= 0 and digit <= 8 and _shop.handle_digit(digit):
+		get_viewport().set_input_as_handled()

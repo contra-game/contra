@@ -1,8 +1,9 @@
-[gd_scene load_steps=6 format=3]
+[gd_scene load_steps=7 format=3]
 
 [ext_resource type="Script" path="res://scripts/player.gd" id="1_player"]
 [ext_resource type="Script" path="res://scripts/health.gd" id="2_health"]
 [ext_resource type="Script" path="res://scripts/weapon_manager.gd" id="3_weapons"]
+[ext_resource type="Script" path="res://scripts/economy.gd" id="4_economy"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_body"]
 radius = 0.4
@@ -39,6 +40,9 @@ far = 500.0
 [node name="Health" type="Node" parent="."]
 script = ExtResource("2_health")
 start_armor = 50.0
+
+[node name="Economy" type="Node" parent="."]
+script = ExtResource("4_economy")
 
 [node name="WeaponManager" type="Node" parent="."]
 script = ExtResource("3_weapons")

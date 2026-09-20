@@ -63,3 +63,18 @@ func damage_at(distance: float) -> float:
 		return damage
 	var t := clampf((distance - falloff_start) / maxf(max_range - falloff_start, 0.001), 0.0, 1.0)
 	return damage * lerpf(1.0, falloff_end_mult, t)
+
+@export_group("Модель от первого лица")
+## Путь к анимированной модели; пусто — собирается из примитивов.
+@export var model_path: String = ""
+@export var model_scale: float = 1.0
+@export var model_offset: Vector3 = Vector3.ZERO
+@export var model_rotation: Vector3 = Vector3.ZERO
+## Имена анимаций внутри модели (в паке Quaternius они с префиксом арматуры).
+@export var anim_fire: String = ""
+@export var anim_reload: String = ""
+## Развернуть модель на 180°, если дуло смотрит назад.
+@export var model_flip: bool = false
+
+## Цена в магазине. 0 — ствол не продаётся.
+@export var price: int = 0

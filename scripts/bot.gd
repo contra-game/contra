@@ -40,6 +40,7 @@ var _patrol_point: Vector3
 var _repath: float = 0.0
 var _strafe: float = 1.0
 var _strafe_timer: float = 0.0
+var _model_anim: AnimationPlayer
 
 func _ready() -> void:
 	_data = Weapons.get_weapon(weapon_id)
@@ -47,7 +48,7 @@ func _ready() -> void:
 	_patrol_point = global_position
 	health.died.connect(_on_died)
 	health.damaged.connect(_on_damaged)
-	_paint()
+	_build_visual()
 
 func _physics_process(delta: float) -> void:
 	# Поведение считает только сервер: клиенты получат результат по сети.
@@ -75,6 +76,7 @@ func _physics_process(delta: float) -> void:
 	else:
 		velocity.y = -0.1
 	move_and_slide()
+	_update_animation()
 
 # --- восприятие --------------------------------------------------------------
 
@@ -312,11 +314,39 @@ func respawn(at: Transform3D) -> void:
 	_reload_left = 0.0
 	health.reset()
 
-## Цвет по команде, чтобы бот был заметен на карте.
-func _paint() -> void:
+## Внешний вид: модель бойца, если ассеты на месте, иначе капсулы из сцены,
+## покрашенные по команде.
+func _build_visual() -> void:
+	var model := CharacterModel.build(_skin_name(), 1.8)
+	if model != null:
+		for child in mesh_root.get_children():
+			child.queue_free()
+		mesh_root.add_child(model)
+		_model_anim = model.get_node_or_null("AnimationPlayer")
+		# Без этого боец стоит в T-позе, пока не сделает первый шаг.
+		if _model_anim != null and _model_anim.has_animation("idle"):
+			_model_anim.play("idle")
+		return
+
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = Color(0.72, 0.22, 0.2) if team == 1 else Color(0.2, 0.42, 0.75)
 	mat.roughness = 0.7
 	for child in mesh_root.get_children():
 		if child is MeshInstance3D:
 			child.material_override = mat
+
+func _skin_name() -> String:
+	const SKINS := ["criminalMaleA", "skaterMaleA", "skaterFemaleA", "cyborgFemaleA"]
+	return SKINS[abs(get_instance_id()) % SKINS.size()]
+
+## Анимация выбирается по фактической скорости — отдельного состояния не нужно.
+func _update_animation() -> void:
+	if _model_anim == null:
+		return
+	var wanted := "run" if Vector2(velocity.x, velocity.z).length() > 0.8 else "idle"
+	if state == State.DEAD:
+		if _model_anim.is_playing():
+			_model_anim.stop()
+		return
+	if _model_anim.current_animation != wanted and _model_anim.has_animation(wanted):
+		_model_anim.play(wanted)
