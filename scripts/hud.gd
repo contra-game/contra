@@ -97,12 +97,20 @@ func _build_scoreboard() -> void:
 func _refresh_scoreboard() -> void:
 	var rows: Array[String] = []
 	if Session.online:
-		rows.append("%s  •  %d игроков  •  %d мс" % [Session.room_name, Session.players().size(), int(Fusion.get_rtt() * 1000.0)])
+		rows.append("%s  •  %d игроков  •  %d мс" % [
+			Session.room_name, Session.players().size(), int(NetApi.rtt() * 1000.0)])
 		rows.append("ИГРОК                         ФРАГИ / СМЕРТИ")
 		for actor in get_tree().get_nodes_in_group("combatants"):
-			if actor is PlayerCharacter and actor.get_parent() is NetPlayer:
-				var wrapper: NetPlayer = actor.get_parent()
-				rows.append("%s%s        %d / %d" % [actor.display_name, " (вы)" if actor.local_control else "", wrapper.frags, wrapper.deaths])
+			if not actor is PlayerCharacter:
+				continue
+			# Обвязку узнаём по методу, а не по классу: её скрипт не существует
+			# без Photon SDK, а табло должно открываться и офлайн.
+			var wrapper: Node = actor.get_parent()
+			if wrapper == null or not wrapper.has_method("apply_remote_damage"):
+				continue
+			rows.append("%s%s        %d / %d" % [
+				actor.display_name, " (вы)" if actor.local_control else "",
+				wrapper.frags, wrapper.deaths])
 	elif game != null:
 		rows.append("Тренировка\n%s        %d / %d" % [Session.player_name, game.kills, game.deaths])
 	_score_rows.text = "\n\n".join(rows)

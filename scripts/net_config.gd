@@ -20,9 +20,10 @@ static func region() -> String:
 	var value := _value("region")
 	return value if value != "" else "eu"
 
-## SDK ставится вручную: Photon отдаёт архив только авторизованным.
+## SDK ставится вручную: Photon отдаёт архив только авторизованным. Проверяем
+## именно поднятое расширение — файл на диске может лежать и не загрузиться.
 static func sdk_installed() -> bool:
-	return ResourceLoader.exists(ADDON_PATH) or FileAccess.file_exists(ADDON_PATH)
+	return NetApi.available()
 
 ## Что мешает поднять сеть прямо сейчас; пустая строка — всё на месте.
 static func blocker() -> String:

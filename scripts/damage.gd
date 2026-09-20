@@ -4,7 +4,7 @@
 class_name Damage
 extends RefCounted
 
-static func apply(target: Node, amount: float, attacker: Node, headshot: bool, penetration: float) -> float:
+static func apply(target: Node, amount: float, attacker: Node, headshot: bool, penetration: float, weapon_id: String = "") -> float:
 	if target == null or not is_instance_valid(target):
 		return 0.0
 	var hp := find_health(target)
@@ -25,11 +25,10 @@ static func apply(target: Node, amount: float, attacker: Node, headshot: bool, p
 			return 0.0
 		if not attacker.local_control or not attacker.health.alive:
 			return 0.0
-		# Аргументы уходят списком: Callable.bind() Fusion не понимает и роняет
-		# процесс. Метод живёт на обвязке — это узел с дочерним репликатором,
-		# по нему SDK и находит того же бойца на чужом клиенте.
-		Fusion.rpc_to_player(net.replicator.get_owner_id(),
-			net.apply_remote_damage, amount, headshot, penetration, net.life_serial)
+		# Метод живёт на обвязке — это узел с дочерним репликатором, по нему SDK
+		# и находит того же бойца на чужом клиенте.
+		NetApi.rpc_to_player(net.replicator.get_owner_id(), net.apply_remote_damage,
+			[weapon_id, amount, headshot, net.life_serial])
 		return amount
 
 	if not target.multiplayer.is_server():
