@@ -204,8 +204,10 @@ func _has_line_of_sight(attacker: PlayerCharacter) -> bool:
 
 func _build_world_weapon() -> void:
 	_shown_weapon = weapon_id
+	# Метод вызывается из _process; немедленный free() посреди обхода дерева —
+	# лишний риск без всякой выгоды.
 	if _world_weapon != null:
-		_world_weapon.free()
+		_world_weapon.queue_free()
 	_world_weapon = Node3D.new()
 	player.head.add_child(_world_weapon)
 	_world_weapon.position = Vector3(0.24, -0.38, -0.28)

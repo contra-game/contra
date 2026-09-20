@@ -61,6 +61,8 @@ var _step_accum: float = 0.0
 var _land_kick: float = 0.0
 var _input_dir := Vector2.ZERO
 var _wants_jump: bool = false
+## Битовая маска того, от чего зависит внешний вид: жив / свой / есть модель.
+var _visual_state: int = -1
 
 func _ready() -> void:
 	# Форма коллайдера общая для всех инстансов сцены — копируем под себя.
@@ -92,7 +94,14 @@ func configure_control(mine: bool) -> void:
 	weapons.set_local_visuals(mine)
 	update_life_visuals()
 
+## Зовётся каждый кадр для чужих бойцов, поэтому пересчитываем только на смене
+## состояния: set_deferred на каждом кадре — лишняя очередь вызовов на каждого
+## бойца в комнате.
 func update_life_visuals() -> void:
+	var state := (1 if health.alive else 0) | (2 if local_control else 0) | (4 if _body_model != null else 0)
+	if state == _visual_state:
+		return
+	_visual_state = state
 	body_mesh.visible = not local_control and health.alive and _body_model == null
 	if _body_model != null:
 		_body_model.visible = not local_control and health.alive

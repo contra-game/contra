@@ -40,6 +40,11 @@ func _run() -> void:
 	await get_tree().physics_frame
 	_check(bot.collision_layer == 0, "труп бота убран со слоя попаданий")
 
+	# Пересчёт видимости идемпотентен: повторный вызов ничего не ломает.
+	player.update_life_visuals()
+	player.update_life_visuals()
+	_check(player.collision_layer == 2, "живой игрок остаётся на своём слое")
+
 	var space := player.get_world_3d().direct_space_state
 	var across := PhysicsRayQueryParameters3D.create(
 		bot.global_position + Vector3.UP * 0.9 + Vector3.RIGHT * 4.0,
