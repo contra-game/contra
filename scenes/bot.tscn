@@ -1,0 +1,42 @@
+[gd_scene load_steps=6 format=3]
+
+[ext_resource type="Script" path="res://scripts/bot.gd" id="1_bot"]
+[ext_resource type="Script" path="res://scripts/health.gd" id="2_health"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_bot"]
+radius = 0.4
+height = 1.8
+
+[sub_resource type="CapsuleMesh" id="CapsuleMesh_bot"]
+radius = 0.4
+height = 1.5
+
+[sub_resource type="SphereMesh" id="SphereMesh_head"]
+radius = 0.22
+height = 0.44
+
+[node name="Bot" type="CharacterBody3D" groups=["combatants"]]
+collision_layer = 4
+collision_mask = 3
+script = ExtResource("1_bot")
+
+[node name="Collider" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
+shape = SubResource("CapsuleShape3D_bot")
+
+[node name="Mesh" type="Node3D" parent="."]
+
+[node name="Torso" type="MeshInstance3D" parent="Mesh"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.75, 0)
+mesh = SubResource("CapsuleMesh_bot")
+
+[node name="Head" type="MeshInstance3D" parent="Mesh"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.62, 0)
+mesh = SubResource("SphereMesh_head")
+
+[node name="Muzzle" type="MeshInstance3D" parent="Mesh"]
+transform = Transform3D(0.12, 0, 0, 0, 0.12, 0, 0, 0, 0.7, 0.22, 1.25, -0.45)
+mesh = SubResource("CapsuleMesh_bot")
+
+[node name="Health" type="Node" parent="."]
+script = ExtResource("2_health")

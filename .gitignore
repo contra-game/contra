@@ -1,0 +1,13 @@
+# Godot
+.godot/
+/android/
+export_presets.cfg
+
+# Исходники скачанных ассетов: в игре используются уже распакованные
+# и обрезанные файлы в assets/city и assets/sfx
+assets/downloads/
+assets/raw/
+
+# Кадры, которые делает tools/screenshot.tscn
+tools/*.png
+tools/*.png.import
