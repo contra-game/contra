@@ -30,8 +30,11 @@ var _rng := RandomNumberGenerator.new()
 
 func _ready() -> void:
 	# Режим и seed приходят из сессии: в сети карта должна собраться одинаковой
-	# у всех, поэтому seed раздаёт хост, а не константа матча.
-	online = Session.online
+	# у всех, поэтому seed раздаёт хост, а не константа матча. Флаг считается
+	# один раз и по факту живого соединения: если связь отвалилась между лобби и
+	# матчем, матч должен быть полностью офлайновым, иначе точки оружия ждут
+	# хоста, которого нет, а счёт пишется в узел без сетевой обвязки.
+	online = Session.online and Session.is_online()
 	if Session.match_seed != 0:
 		match_seed = Session.match_seed
 	print("[матч] режим=%s seed=%d ботов=%d" % [
@@ -40,7 +43,7 @@ func _ready() -> void:
 	map.build(match_seed)
 	_spawn_pickups()
 
-	if online and Session.is_online():
+	if online:
 		_bind_network()
 		# В сети бойцов нет кроме живых игроков: бот был бы локальным у каждого
 		# клиента, то есть невидимым для остальных, и счёт по нему бы разъезжался.
@@ -197,6 +200,9 @@ func _network_spawn(initial: bool) -> Transform3D:
 	return best
 
 func _on_network_kill(victim_name: String, _headshot: bool) -> void:
+	# Подтверждение может прийти раньше, чем Photon отдал нам своего бойца.
+	if player == null or not is_instance_valid(player):
+		return
 	kills += 1
 	player.get_parent().frags = kills
 	score_changed.emit(kills, deaths)

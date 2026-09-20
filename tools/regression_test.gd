@@ -43,6 +43,13 @@ func _run() -> void:
 	# Игроки должны сталкиваться телами друг с другом.
 	_check(player.collision_mask & 2 != 0, "игрок сталкивается с игроками")
 
+	# Матч без живого соединения обязан быть честно офлайновым.
+	_check(not main.online, "офлайн-матч не притворяется сетевым")
+	for node in main.get_node("Actors").get_children():
+		if node is WeaponPickup:
+			_check(node.network_index < 0, "точка оружия офлайн не ждёт хоста")
+			break
+
 func _first_bot() -> Bot:
 	for node in main.get_node("Actors").get_children():
 		if node is Bot:
