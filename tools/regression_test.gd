@@ -97,6 +97,14 @@ func _run() -> void:
 	_check(is_equal_approx(main.hud._crosshair.fov_degrees, 55.0), "прицел знает fov камеры")
 	main.player.set_physics_process(true)
 
+	# Звук не должен плодить узлы: пул фиксированного размера.
+	var before_players := Sfx.get_child_count()
+	for i in 50:
+		Sfx.play_3d(&"hit", main.player.global_position)
+	await get_tree().process_frame
+	_check(Sfx.get_child_count() == before_players,
+		"звук берётся из пула (узлов было %d, стало %d)" % [before_players, Sfx.get_child_count()])
+
 	# Повторная сборка не должна удваивать карту.
 	var city: CityMap = main.get_node("Map")
 	var spawns := city.player_spawns.size()

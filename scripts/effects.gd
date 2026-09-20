@@ -3,19 +3,17 @@
 class_name Effects
 extends RefCounted
 
+## Материалы и меши общие на все эффекты: раньше каждая дробина создавала свой
+## StandardMaterial3D, а на них компилируются варианты шейдера.
+static var _tracer_materials: Dictionary = {}     # Color -> StandardMaterial3D
+static var _spark: Mesh = null
+static var _mark_material: StandardMaterial3D = null
+
 static func tracer(world: Node, from: Vector3, to: Vector3, color: Color = Color(1.0, 0.85, 0.45)) -> void:
 	if world == null or from.distance_to(to) < 0.05:
 		return
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.albedo_color = color
-	mat.emission_enabled = true
-	mat.emission = color
-	mat.emission_energy_multiplier = 2.0
-
 	var mesh := ImmediateMesh.new()
-	mesh.surface_begin(Mesh.PRIMITIVE_LINES, mat)
+	mesh.surface_begin(Mesh.PRIMITIVE_LINES, _tracer_material(color))
 	mesh.surface_add_vertex(from)
 	mesh.surface_add_vertex(to)
 	mesh.surface_end()
@@ -24,10 +22,23 @@ static func tracer(world: Node, from: Vector3, to: Vector3, color: Color = Color
 	node.mesh = mesh
 	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	world.add_child(node)
+	# Раньше альфа гасилась твином по материалу — с общим материалом так нельзя,
+	# да и 70 мс всё равно не разглядеть.
+	_kill_later(node, 0.07)
 
-	var tween := node.create_tween()
-	tween.tween_property(mat, "albedo_color:a", 0.0, 0.07)
-	tween.tween_callback(node.queue_free)
+static func _tracer_material(color: Color) -> StandardMaterial3D:
+	var cached: StandardMaterial3D = _tracer_materials.get(color)
+	if cached != null:
+		return cached
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = color
+	mat.emission_enabled = true
+	mat.emission = color
+	mat.emission_energy_multiplier = 2.0
+	_tracer_materials[color] = mat
+	return mat
 
 static func impact(world: Node, point: Vector3, normal: Vector3, flesh: bool) -> void:
 	if world == null:
@@ -59,11 +70,7 @@ static func impact(world: Node, point: Vector3, normal: Vector3, flesh: bool) ->
 		var quad := QuadMesh.new()
 		quad.size = Vector2(0.09, 0.09)
 		mark.mesh = quad
-		var mat := StandardMaterial3D.new()
-		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		mat.albedo_color = Color(0.05, 0.04, 0.04, 0.85)
-		mark.material_override = mat
+		mark.material_override = _mark()
 		mark.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		world.add_child(mark)
 		mark.global_position = point + normal * 0.012
@@ -72,6 +79,14 @@ static func impact(world: Node, point: Vector3, normal: Vector3, flesh: bool) ->
 		else:
 			mark.look_at(mark.global_position + normal, Vector3.FORWARD)
 		_kill_later(mark, 12.0)
+
+static func _mark() -> StandardMaterial3D:
+	if _mark_material == null:
+		_mark_material = StandardMaterial3D.new()
+		_mark_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_mark_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_mark_material.albedo_color = Color(0.05, 0.04, 0.04, 0.85)
+	return _mark_material
 
 static func muzzle_flash(parent: Node3D, offset: Vector3) -> void:
 	if parent == null:
@@ -102,13 +117,15 @@ static func muzzle_flash(parent: Node3D, offset: Vector3) -> void:
 	tween.tween_callback(flash.queue_free)
 
 static func _spark_mesh() -> Mesh:
-	var box := BoxMesh.new()
-	box.size = Vector3(0.02, 0.02, 0.02)
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.vertex_color_use_as_albedo = true
-	box.material = mat
-	return box
+	if _spark == null:
+		var box := BoxMesh.new()
+		box.size = Vector3(0.02, 0.02, 0.02)
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.vertex_color_use_as_albedo = true
+		box.material = mat
+		_spark = box
+	return _spark
 
 static func _kill_later(node: Node, seconds: float) -> void:
 	var timer := node.get_tree().create_timer(seconds)
