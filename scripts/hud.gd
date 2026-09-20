@@ -25,6 +25,9 @@ var _scope: ScopeOverlay
 var _money_label: Label
 var _paused: bool = false
 var _respawn_left: float = 0.0
+var _scoreboard: PanelContainer
+var _score_rows: Label
+var _score_refresh: float = 0.0
 
 func _ready() -> void:
 	layer = 10
@@ -37,6 +40,7 @@ func _ready() -> void:
 	_build_shop()
 	_scope = ScopeOverlay.new()
 	add_child(_scope)
+	_build_scoreboard()
 
 func bind(game_node: Node, player_node: PlayerCharacter) -> void:
 	game = game_node
@@ -60,8 +64,16 @@ func bind(game_node: Node, player_node: PlayerCharacter) -> void:
 
 	_on_health_changed(player.health.health, player.health.armor)
 	_on_score_changed(0, 0)
+	_on_weapon_changed(player.weapons.current_data())
+	var slot := player.weapons.current()
+	_on_ammo_changed(slot.mag, slot.reserve)
 
 func _process(delta: float) -> void:
+	_scoreboard.visible = Input.is_action_pressed("scoreboard") and not _paused
+	_score_refresh -= delta
+	if _scoreboard.visible and _score_refresh <= 0.0:
+		_score_refresh = 0.25
+		_refresh_scoreboard()
 	if _respawn_left > 0.0:
 		_respawn_left = maxf(_respawn_left - delta, 0.0)
 		_center_label.text = "Вы убиты\nВозрождение через %.1f" % _respawn_left
@@ -69,6 +81,31 @@ func _process(delta: float) -> void:
 	if player != null and player.weapons != null:
 		_hint_label.visible = player.weapons.reloading
 		_hint_label.text = "ПЕРЕЗАРЯДКА"
+
+func _build_scoreboard() -> void:
+	_scoreboard = PanelContainer.new()
+	_scoreboard.set_anchors_preset(Control.PRESET_CENTER)
+	_scoreboard.position = Vector2(-280, -160)
+	_scoreboard.custom_minimum_size = Vector2(560, 240)
+	_scoreboard.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_scoreboard.visible = false
+	add_child(_scoreboard)
+	_score_rows = _make_label("", 24, Color.WHITE)
+	_score_rows.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_scoreboard.add_child(_score_rows)
+
+func _refresh_scoreboard() -> void:
+	var rows: Array[String] = []
+	if Session.online:
+		rows.append("%s  •  %d игроков  •  %d мс" % [Session.room_name, Session.players().size(), int(Fusion.get_rtt() * 1000.0)])
+		rows.append("ИГРОК                         ФРАГИ / СМЕРТИ")
+		for actor in get_tree().get_nodes_in_group("combatants"):
+			if actor is PlayerCharacter and actor.get_parent() is NetPlayer:
+				var wrapper: NetPlayer = actor.get_parent()
+				rows.append("%s%s        %d / %d" % [actor.display_name, " (вы)" if actor.local_control else "", wrapper.frags, wrapper.deaths])
+	elif game != null:
+		rows.append("Тренировка\n%s        %d / %d" % [Session.player_name, game.kills, game.deaths])
+	_score_rows.text = "\n\n".join(rows)
 
 # --- построение --------------------------------------------------------------
 
@@ -168,8 +205,15 @@ func _build_pause() -> void:
 	resume.pressed.connect(toggle_pause)
 	box.add_child(resume)
 
+	var to_menu := Button.new()
+	to_menu.text = "Выйти в меню"
+	to_menu.pressed.connect(func() -> void:
+		get_tree().paused = false
+		Session.to_menu())
+	box.add_child(to_menu)
+
 	var quit := Button.new()
-	quit.text = "Выйти"
+	quit.text = "Выйти из игры"
 	quit.pressed.connect(func() -> void: get_tree().quit())
 	box.add_child(quit)
 
@@ -208,6 +252,7 @@ func _on_damaged(_amount: float, _attacker: Node, _headshot: bool) -> void:
 	_damage_flash.modulate.a = 1.0
 
 func _on_player_died(_attacker: Node) -> void:
+	_shop.close()
 	_respawn_left = game.respawn_delay if game != null else 3.0
 	_crosshair.visible = false
 
@@ -230,9 +275,12 @@ func push_killfeed(text: String) -> void:
 			label.queue_free())
 
 func toggle_pause() -> void:
+	_shop.close()
 	_paused = not _paused
 	_pause_panel.visible = _paused
-	get_tree().paused = _paused
+	get_tree().paused = _paused and not Session.online
+	if player != null:
+		player.input_enabled = not _paused
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if _paused else Input.MOUSE_MODE_CAPTURED
 
 # --- магазин -----------------------------------------------------------------
@@ -251,6 +299,15 @@ func _on_money_changed(amount: int) -> void:
 
 ## Клавиши магазина перехватываются здесь: пока он открыт, цифры покупают.
 func _unhandled_input(event: InputEvent) -> void:
+	if event.is_action_pressed("ui_cancel"):
+		if _shop.visible:
+			_shop.close()
+		else:
+			toggle_pause()
+		get_viewport().set_input_as_handled()
+		return
+	if _paused:
+		return
 	if event.is_action_pressed("buy"):
 		if player != null and not player.is_dead():
 			_shop.toggle()

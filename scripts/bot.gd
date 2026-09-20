@@ -108,6 +108,10 @@ func _nearest_enemy() -> Node3D:
 			continue
 		if node.get("team") == team:
 			continue
+		# Чужой сетевой боец — не цель: боты локальные у каждого клиента, и его
+		# хозяин такого выстрела всё равно не увидит.
+		if node.get("local_control") == false:
+			continue
 		var hp := Damage.find_health(node)
 		if hp == null or not hp.alive:
 			continue

@@ -1,11 +1,17 @@
-[gd_scene load_steps=3 format=3]
+[gd_scene load_steps=4 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/player.tscn" id="1_player"]
 [ext_resource type="Script" path="res://scripts/net_player.gd" id="2_net"]
+[ext_resource type="Resource" path="res://scenes/player_replication.tres" id="3_config"]
 
 [node name="NetPlayer" type="Node3D"]
 script = ExtResource("2_net")
 
 [node name="Replicator" type="FusionSharedReplicator" parent="."]
+replication_config = ExtResource("3_config")
+root_replication_mode = 1
+object_interpolation_time = 0.08
+owner_mode = 1
 
 [node name="Player" parent="." instance=ExtResource("1_player")]
+local_control = false

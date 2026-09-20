@@ -11,6 +11,7 @@ signal picked_up(weapon_id: StringName, by: Node)
 var _model: Node3D
 var _available: bool = true
 var _spin: float = 0.0
+var network_index: int = -1
 
 func _ready() -> void:
 	collision_layer = 1 << 3      # слой pickup
@@ -36,6 +37,10 @@ func pick_up(who: Node) -> void:
 	if not _available or who == null:
 		return
 	var manager = who.get("weapons")
+	if network_index >= 0:
+		if who is PlayerCharacter and who.local_control and who.health.alive and manager.can_receive(weapon_id):
+			Session.net.request_pickup(network_index)
+		return
 	if manager == null or not manager.give(weapon_id, true):
 		return
 	_available = false
@@ -43,6 +48,11 @@ func pick_up(who: Node) -> void:
 	Sfx.play_3d(&"pickup", global_position, 1.0, -2.0)
 	picked_up.emit(weapon_id, who)
 	get_tree().create_timer(respawn_delay).timeout.connect(_restore)
+
+func set_available(value: bool) -> void:
+	_available = value
+	if _model != null:
+		_model.visible = value
 
 func _restore() -> void:
 	if not is_instance_valid(self):

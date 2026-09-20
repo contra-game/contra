@@ -17,3 +17,7 @@ photon.cfg
 
 # Photon Fusion SDK: проприетарный, распространять нельзя — ставится вручную
 addons/fusion/
+
+# Сборка и пресет экспорта (в нём пути с конкретной машины)
+build/
+export_presets.cfg

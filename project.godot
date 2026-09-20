@@ -16,19 +16,21 @@ compatibility/default_parent_skeleton_in_mesh_instance_3d=true
 
 config/name="Contra City"
 config/description="Мультиплеерный FPS-прототип в духе Контра Сити"
-run/main_scene="res://scenes/main.tscn"
+run/main_scene="res://scenes/menu.tscn"
 config/features=PackedStringArray("4.7", "Forward Plus")
 
 [autoload]
 
 Weapons="*res://scripts/weapons_db.gd"
 Sfx="*res://scripts/sfx.gd"
+Session="*res://scripts/session.gd"
 
 [display]
 
 window/size/viewport_width=1600
 window/size/viewport_height=900
 window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
 
 [input]
 
