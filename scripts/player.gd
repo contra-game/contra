@@ -76,13 +76,15 @@ func _ready() -> void:
 	configure_control(local_control)
 
 ## Вызывается и после сетевого спавна: дочерний _ready раньше родительского.
+## Режимом мыши здесь не управляем — этот метод переспрашивается при смене
+## авторитета (уход хоста), и захват перебивал бы открытую паузу или магазин.
+## Мышь берут те, кто знает состояние экрана: game при спавне и hud в паузе.
 func configure_control(mine: bool) -> void:
 	local_control = mine
 	if _capsule == null:
 		return
 	if mine:
 		camera.make_current()
-		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	elif camera.current:
 		camera.clear_current()
 	if not mine and _body_model == null:
@@ -142,13 +144,18 @@ func _read_input() -> void:
 		sprinting = false
 		return
 	_input_dir = Input.get_vector("move_left", "move_right", "move_forward", "move_back")
-	_wants_jump = Input.is_action_pressed("jump")
+	# Прыжок копится по новому нажатию и тратится при касании земли: зажатый
+	# пробел больше не даёт бесконечный банихоп, но нажатие в воздухе
+	# срабатывает при посадке — так привычнее.
+	if Input.is_action_just_pressed("jump"):
+		_wants_jump = true
 	sprinting = Input.is_action_pressed("sprint") and not crouching and _input_dir.y < 0.0
 
 func _apply_gravity(delta: float) -> void:
 	if is_on_floor():
 		if _wants_jump:
 			velocity.y = jump_velocity
+			_wants_jump = false
 		else:
 			velocity.y = -0.1
 	else:
@@ -280,6 +287,7 @@ func respawn(at: Transform3D) -> void:
 	look_yaw = at.basis.get_euler().y
 	look_pitch = 0.0
 	velocity = Vector3.ZERO
+	_wants_jump = false
 	_recoil = Vector2.ZERO
 	_recoil_target = Vector2.ZERO
 	health.reset()

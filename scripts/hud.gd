@@ -79,6 +79,7 @@ func _process(delta: float) -> void:
 		_center_label.text = "Вы убиты\nВозрождение через %.1f" % _respawn_left
 	_damage_flash.modulate.a = lerpf(_damage_flash.modulate.a, 0.0, delta * 3.5)
 	if player != null and player.weapons != null:
+		_crosshair.set_fov(player.camera.fov)
 		_hint_label.visible = player.weapons.reloading
 		_hint_label.text = "ПЕРЕЗАРЯДКА"
 

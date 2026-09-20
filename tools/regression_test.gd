@@ -88,6 +88,15 @@ func _run() -> void:
 	main.player.display_name = "Ы".repeat(200)
 	_check(main._name_of(main.player).length() <= 24, "длинное имя обрезается в киллфиде")
 
+	# Прицел должен знать текущий fov, иначе в прицеливании штрихи врут.
+	# Физику игрока глушим: иначе _update_view утянет fov назад к базовому.
+	main.player.set_physics_process(false)
+	main.player.camera.fov = 55.0
+	await get_tree().process_frame
+	await get_tree().process_frame
+	_check(is_equal_approx(main.hud._crosshair.fov_degrees, 55.0), "прицел знает fov камеры")
+	main.player.set_physics_process(true)
+
 func _bots() -> Array:
 	return main.get_node("Actors").get_children().filter(func(n): return n is Bot)
 

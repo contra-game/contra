@@ -85,6 +85,7 @@ func _on_local_player_spawned(node: Node) -> void:
 	player.died.connect(_on_player_died)
 	player.weapons.hit_confirmed.connect(_on_player_hit)
 	hud.bind(self, player)
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 # --- спавны ------------------------------------------------------------------
 
@@ -98,6 +99,7 @@ func _spawn_player() -> void:
 	player.died.connect(_on_player_died)
 	player.weapons.hit_confirmed.connect(_on_player_hit)
 	hud.bind(self, player)
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 func _spawn_bots(count: int) -> void:
 	for i in count:
