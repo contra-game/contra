@@ -21,6 +21,12 @@ var _remote_life: int = -1
 var _hand_skeleton: Skeleton3D
 var _hand_bone: int = -1
 
+# Бюджеты входящих RPC. Самый частый законный случай — M4A1 на 720 выстрелов в
+# минуту, то есть 12 пакетов в секунду; 20/с с запасом 30 покрывают его вместе
+# с залпом дроби и догоняющими пакетами после лага.
+var _damage_budget := RateLimiter.new(20.0, 30.0)
+var _shot_budget := RateLimiter.new(20.0, 30.0)
+
 func _ready() -> void:
 	replicator.authority_changed.connect(_on_authority_changed)
 	replicator.spawned.connect(configure_owner)
@@ -92,6 +98,8 @@ func apply_remote_damage(weapon_id_in: String, amount: float, headshot: bool, ta
 	if not replicator.has_authority() or not player.health.alive or target_life != life_serial:
 		return
 	var attacker_id: int = NetApi.rpc_sender()
+	if not _damage_budget.allow(attacker_id):
+		return
 	var attacker := _find_player(attacker_id)
 	if attacker == null or attacker == player or not attacker.health.alive:
 		return
@@ -135,7 +143,10 @@ func _on_shot(id: String, origin: Vector3, end: Vector3) -> void:
 
 @rpc("authority", "call_remote", "unreliable")
 func show_shot(id: String, origin: Vector3, end: Vector3) -> void:
-	if NetApi.rpc_sender() != replicator.get_owner_id() or player.local_control:
+	var sender: int = NetApi.rpc_sender()
+	if sender != replicator.get_owner_id() or player.local_control:
+		return
+	if not _shot_budget.allow(sender):
 		return
 	var data := Weapons.get_weapon(StringName(id))
 	if data == null or not origin.is_finite() or not end.is_finite():

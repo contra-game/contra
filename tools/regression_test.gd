@@ -67,6 +67,15 @@ func _run() -> void:
 	await get_tree().physics_frame
 	_check(confirms[0] == 1, "выстрел дробью подтверждается один раз (получено %d)" % confirms[0])
 
+	# Токен-бакет: 20 пакетов в секунду при запасе 30 — тридцать первый подряд
+	# обязан быть отброшен.
+	var budget := RateLimiter.new(20.0, 30.0)
+	var allowed := 0
+	for i in 40:
+		if budget.allow(7):
+			allowed += 1
+	_check(allowed == 30, "бюджет RPC пропускает ровно запас (пропущено %d)" % allowed)
+
 func _bots() -> Array:
 	return main.get_node("Actors").get_children().filter(func(n): return n is Bot)
 
