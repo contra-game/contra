@@ -21,6 +21,7 @@ signal joined(success: bool)
 signal local_player_spawned(player: Node)
 signal remote_player_spawned(player: Node)
 signal kill_confirmed(victim_name: String, headshot: bool)
+signal death_announced(victim_name: String, killer_name: String, headshot: bool)
 signal connection_lost()
 
 const APP_VERSION := "0.3"
@@ -58,15 +59,17 @@ func request_pickup(index: int) -> void:
 
 @rpc("any_peer", "call_remote", "reliable")
 func receive_pickup_request(index: int) -> void:
-	if is_host():
-		_grant_pickup(index, Fusion.get_rpc_sender())
+	# RPC может догнать нас уже после выхода из комнаты.
+	if is_host() and NetApi.room() != null:
+		_grant_pickup(index, NetApi.rpc_sender())
 
 func _grant_pickup(index: int, sender: int) -> void:
 	if index < 0 or index >= _pickups.size() or not is_instance_valid(_pickups[index]):
 		return
 	var pickup := _pickups[index]
-	var now: float = Fusion.get_network_time()
-	var expires: float = maxf(_pickup_expiry.get(index, 0.0), Fusion.get_room().get_custom_properties().get("pickup_%d" % index, 0.0))
+	var now: float = NetApi.network_time()
+	var expires: float = maxf(_pickup_expiry.get(index, 0.0),
+		float(NetApi.room_property("pickup_%d" % index, 0.0)))
 	if now < expires:
 		return
 	for actor in get_tree().get_nodes_in_group("combatants"):
@@ -74,18 +77,20 @@ func _grant_pickup(index: int, sender: int) -> void:
 			if actor.global_position.distance_to(pickup.global_position) > 3.8:
 				return
 			_pickup_expiry[index] = now + pickup.respawn_delay
-			Fusion.get_room().set_property("pickup_%d" % index, _pickup_expiry[index])
+			NetApi.set_room_property("pickup_%d" % index, _pickup_expiry[index])
 			pickup.set_available(false)
-			if sender == Fusion.get_local_player_id():
+			if sender == NetApi.local_player_id():
 				_apply_pickup(index)
 			else:
-				Fusion.rpc_to_player(sender, receive_pickup_grant, index)
+				NetApi.rpc_to_player(sender, receive_pickup_grant, [index])
 			return
 
 @rpc("any_peer", "call_remote", "reliable")
 func receive_pickup_grant(index: int) -> void:
-	if is_online() and Fusion.get_rpc_sender() == Fusion.get_room().get_master_client_id():
-		_apply_pickup(index)
+	var room := NetApi.room()
+	if room == null or NetApi.rpc_sender() != int(room.call("get_master_client_id")):
+		return
+	_apply_pickup(index)
 
 func _apply_pickup(index: int) -> void:
 	if index < 0 or index >= _pickups.size() or not is_instance_valid(_local_player):
@@ -188,11 +193,14 @@ func _process(_delta: float) -> void:
 		_on_connection_failed("время ожидания истекло")
 		Fusion.disconnect_from_photon()
 	if is_online() and not _pickups.is_empty():
-		var props := Fusion.get_room().get_custom_properties()
-		var now: float = Fusion.get_network_time()
+		var room := NetApi.room()
+		if room == null:
+			return
+		var props: Dictionary = room.call("get_custom_properties")
+		var now: float = NetApi.network_time()
 		for i in _pickups.size():
 			if is_instance_valid(_pickups[i]):
-				var expiry: float = maxf(_pickup_expiry.get(i, 0.0), props.get("pickup_%d" % i, 0.0))
+				var expiry: float = maxf(_pickup_expiry.get(i, 0.0), float(props.get("pickup_%d" % i, 0.0)))
 				_pickups[i].set_available(now >= expiry)
 
 func _on_connection_status(status: int) -> void:

@@ -64,6 +64,8 @@ func _bind_network() -> void:
 	if not net.remote_player_spawned.is_connected(_on_remote_player_spawned):
 		net.remote_player_spawned.connect(_on_remote_player_spawned)
 	net.kill_confirmed.connect(_on_network_kill)
+	if not net.death_announced.is_connected(_on_death_announced):
+		net.death_announced.connect(_on_death_announced)
 
 func _on_session_state(text: String) -> void:
 	killfeed.emit(text)
@@ -207,6 +209,14 @@ func _on_network_kill(victim_name: String, _headshot: bool) -> void:
 	player.get_parent().frags = kills
 	score_changed.emit(kills, deaths)
 	killfeed.emit("Вы убили %s" % victim_name)
+
+## Своё убийство уже показал kill_confirmed, поэтому строки от своего имени
+## пропускаем. Тёзки в одной комнате потеряют одну строку — терпимо, имена в
+## Photon не уникальны и сравнивать больше нечего.
+func _on_death_announced(victim_name: String, killer_name: String, headshot: bool) -> void:
+	if player != null and is_instance_valid(player) and killer_name == player.display_name:
+		return
+	killfeed.emit("%s убил %s%s" % [killer_name, victim_name, " в голову" if headshot else ""])
 
 func _on_bot_died(attacker: Node, bot: Bot) -> void:
 	if attacker == player:

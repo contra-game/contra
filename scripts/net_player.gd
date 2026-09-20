@@ -20,6 +20,7 @@ var _world_weapon: Node3D
 var _remote_life: int = -1
 var _hand_skeleton: Skeleton3D
 var _hand_bone: int = -1
+var _last_headshot: bool = false
 
 # Бюджеты входящих RPC. Самый частый законный случай — M4A1 на 720 выстрелов в
 # минуту, то есть 12 пакетов в секунду; 20/с с запасом 30 покрывают его вместе
@@ -34,6 +35,8 @@ func _ready() -> void:
 	player.respawned.connect(_on_respawned)
 	player.weapons.weapon_changed.connect(_on_weapon_changed)
 	player.weapons.shot_fired.connect(_on_shot)
+	player.died.connect(_on_local_died)
+	player.health.damaged.connect(_on_local_damaged)
 	configure_owner()
 
 func configure_owner() -> void:
@@ -84,6 +87,28 @@ func _publish_health(hp: float, armor: float) -> void:
 func _on_respawned() -> void:
 	if replicator.has_authority():
 		life_serial += 1
+
+func _on_local_damaged(_amount: float, _attacker: Node, headshot: bool) -> void:
+	_last_headshot = headshot
+
+## Кто именно убил — знает только владелец цели, поэтому смерть объявляет он.
+## RPC call_remote: себе не приходит, свою смерть покажет game._on_player_died.
+func _on_local_died(attacker: Node) -> void:
+	if not replicator.has_authority() or not NetApi.is_in_room():
+		return
+	var killer := "Мир"
+	if attacker != null and is_instance_valid(attacker):
+		var label = attacker.get("display_name")
+		if label != null:
+			killer = str(label)
+	NetApi.rpc_all(announce_death, [player.display_name, killer, _last_headshot])
+
+@rpc("authority", "call_remote", "reliable")
+func announce_death(victim_name: String, killer_name: String, headshot: bool) -> void:
+	if NetApi.rpc_sender() != replicator.get_owner_id():
+		return
+	if Session.net != null:
+		Session.net.death_announced.emit(victim_name.substr(0, 24), killer_name.substr(0, 24), headshot)
 
 func _on_weapon_changed(data: WeaponData) -> void:
 	if replicator.has_authority():

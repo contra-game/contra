@@ -7,6 +7,9 @@ var role := "host"
 var failures := 0
 var hits := 0
 var capture_path := "res://build/network-proof.png"
+## Объявления чужих смертей: при двух участниках строку киллфида показать некому
+## (убийца отфильтрует своё же имя), поэтому проверяем сам факт доставки RPC.
+var announced: Array[String] = []
 var _deadline := 0
 
 func _ready() -> void:
@@ -37,6 +40,7 @@ func _ready() -> void:
 	main.player.set_physics_process(false)
 	print("STATE [", role, "] local id=", main.player.peer_id, " pos=", main.player.position, " other id=", _other().player.peer_id, " pos=", _other().player.position)
 	main.player.weapons.hit_confirmed.connect(func(_head, _killed): hits += 1)
+	Session.net.death_announced.connect(func(victim, killer, _head): announced.append(killer + "/" + victim))
 	await get_tree().create_timer(1.0).timeout
 	_check(main.player.camera.current, "local camera remains current")
 	_check(not _other().player.camera.current, "remote camera inactive")
@@ -146,6 +150,9 @@ func _client() -> void:
 	Damage.apply(other.player, 115.0, main.player, false, 0.95, "awp")
 	if not await _until(func(): return main.kills == 1 and not other.player.health.alive, "kill and death replicated"):
 		return
+	# Смерть объявляет владелец цели: только он знает, кто именно убил.
+	if not await _until(func(): return announced.has("Test_client/Test_host"), "death announced by target owner"):
+		return
 	_check(main.player.economy.money == 1100, "kill pays once")
 	_check(not other.player._body_model.visible, "dead remote hidden")
 	if not await _until(func(): return _flag("respawn_ok") and other.player.health.alive, "remote respawn"):
@@ -227,6 +234,7 @@ func _check(ok: bool, label: String) -> void:
 
 func _fail(label: String) -> void:
 	failures += 1
+	print("FAIL BUDGET ", role, " осталось ", _deadline - Time.get_ticks_msec(), " мс из общего дедлайна")
 	for node in _fighters():
 		print("FAIL STATE ", role, " local=", node.player.local_control, " peer=", node.player.peer_id, " owner=", node.replicator.get_owner_id(), " pos=", node.player.position, " yaw=", node.player.rotation.y, " weapon=", node.weapon_id, " life=", node.life_serial, " hp=", node.net_health)
 	push_error("FAIL [" + role + "] " + label)
