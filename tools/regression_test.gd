@@ -101,7 +101,9 @@ func _run() -> void:
 	var city: CityMap = main.get_node("Map")
 	var spawns := city.player_spawns.size()
 	var props := city.get_node("Props").get_child_count()
+	var started := Time.get_ticks_msec()
 	city.build(main.match_seed)
+	print("сборка карты: %d мс" % (Time.get_ticks_msec() - started))
 	await get_tree().process_frame
 	_check(city.player_spawns.size() == spawns, "повторная сборка не удваивает спавны")
 	_check(city.get_node("Props").get_child_count() == props, "повторная сборка не удваивает пропы")

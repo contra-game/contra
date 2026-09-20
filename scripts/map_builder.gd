@@ -54,6 +54,8 @@ var bot_spawns: Array[Transform3D] = []
 var weapon_spawns: Array[Vector3] = []
 
 var _cache: Dictionary = {}
+## Путь модели -> [{"shape": Shape3D, "transform": Transform3D}, ...].
+var _shapes: Dictionary = {}
 var _rng := RandomNumberGenerator.new()
 var _props: Node3D
 var _has_models: bool = ResourceLoader.exists(COMMERCIAL + "building-a.glb")
@@ -193,15 +195,49 @@ func _place_model(path: String, position: Vector3, yaw: float, with_collision: b
 	node.rotation.y = yaw
 	node.scale = Vector3.ONE * GRID
 	if with_collision:
-		_add_collision(node)
+		_attach_collision(node, _collision_shapes(path, node))
 	return node
 
-## Коллизия строится по самим мешам — декали и дороги её не получают.
-func _add_collision(node: Node) -> void:
+## Формы считаются один раз на модель и переиспользуются всеми её копиями:
+## раньше на каждый из 118 объектов заново строился вогнутый тримеш.
+## Выпуклая оболочка на меш дешевле и для коробчатых домов Kenney достаточна —
+## внутрь них всё равно не заходят, а дороги и декали коллизию не получают.
+func _collision_shapes(path: String, node: Node3D) -> Array:
+	if _shapes.has(path):
+		return _shapes[path]
+	var built: Array = []
+	if node is MeshInstance3D and node.mesh != null:
+		_append_shape(node.mesh, Transform3D.IDENTITY, built)
 	for child in node.get_children():
-		_add_collision(child)
-	if node is MeshInstance3D:
-		node.create_trimesh_collision()
+		_collect_shapes(child, Transform3D.IDENTITY, built)
+	_shapes[path] = built
+	return built
+
+func _collect_shapes(node: Node, parent_transform: Transform3D, out: Array) -> void:
+	var transform := parent_transform
+	if node is Node3D:
+		transform = parent_transform * node.transform
+	if node is MeshInstance3D and node.mesh != null:
+		_append_shape(node.mesh, transform, out)
+	for child in node.get_children():
+		_collect_shapes(child, transform, out)
+
+func _append_shape(mesh: Mesh, transform: Transform3D, out: Array) -> void:
+	var shape := mesh.create_convex_shape(true, true)
+	if shape != null:
+		out.append({"shape": shape, "transform": transform})
+
+## Один StaticBody3D на объект вместо одного на каждый меш внутри него.
+func _attach_collision(node: Node3D, shapes: Array) -> void:
+	if shapes.is_empty():
+		return
+	var body := StaticBody3D.new()
+	node.add_child(body)
+	for row in shapes:
+		var collision := CollisionShape3D.new()
+		collision.shape = row["shape"]
+		collision.transform = row["transform"]
+		body.add_child(collision)
 
 func _place_block(center: Vector3, size: Vector3, color: Color) -> void:
 	var mesh := BoxMesh.new()
@@ -214,7 +250,15 @@ func _place_block(center: Vector3, size: Vector3, color: Color) -> void:
 	node.material_override = mat
 	_props.add_child(node)
 	node.position = center + Vector3.UP * size.y * 0.5
-	node.create_trimesh_collision()
+
+	# Коробке хватает BoxShape3D: тримеш по её же мешу — лишняя работа.
+	var body := StaticBody3D.new()
+	var shape := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = size
+	shape.shape = box
+	body.add_child(shape)
+	node.add_child(body)
 
 # --- земля, границы, небо ----------------------------------------------------
 
