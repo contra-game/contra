@@ -76,6 +76,18 @@ func _report() -> void:
 			player_node = node.get_node_or_null("AnimationPlayer")
 			if player_node != null:
 				break
+		var hand := sample.get_node_or_null("Mesh/characterMedium/Root/Skeleton3D/WeaponHand")
+		if hand != null and hand.get_child_count() > 0:
+			var holder: Node3D = hand.get_child(0)
+			var size := ViewModel.aabb(holder.get_child(0)).size * holder.global_transform.basis.get_scale()
+			print("  позиция ствола: %s, бот: %s, видим=%s" % [
+				str(holder.global_position.snappedf(0.01)), str(sample.global_position.snappedf(0.01)),
+				str(holder.get_child(0).visible)])
+			print("оружие бота: длина=%.2f м (ожидалось ~%.2f), масштаб крепления=%.3f" % [
+				size.length(), Weapons.get_weapon(sample.weapon_id).length,
+				hand.global_transform.basis.get_scale().x])
+		else:
+			print("оружие бота: не прикреплено")
 		if player_node == null:
 			print("модель бойца: анимаций нет (модель не собралась)")
 		else:

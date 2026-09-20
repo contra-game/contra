@@ -379,7 +379,16 @@ func _attach_weapon(model: Node3D) -> void:
 	var weapon := (load(_data.model_path) as PackedScene).instantiate() as Node3D
 	holder.add_child(weapon)
 	ViewModel.fit(holder, weapon, _data)
-	# Кость идёт в масштабе скелета, а он уже ужат под рост бойца.
-	holder.scale *= 1.0 / maxf(model.scale.x, 0.001)
+	# Точка крепления наследует масштаб кости, скелета и самой модели бойца.
+	# Без компенсации ствол раздувается в разы и бегает по карте великаном.
+	attachment.force_update_transform()
+	var attach_scale: float = attachment.global_transform.basis.get_scale().x
+	# model_scale задан для вида от первого лица (там ствол намеренно крупнее);
+	# в мире оружие должно быть настоящего размера.
+	var compensation: float = attach_scale * maxf(_data.model_scale, 0.001)
+	if compensation > 0.0001:
+		# Делим и смещение: оно посчитано в старом масштабе держателя.
+		holder.scale /= compensation
+		holder.position /= compensation
 	ViewModel.paint(weapon, _data.body_color, true)
 	_weapon_model = weapon
