@@ -14,3 +14,6 @@ tools/*.png.import
 
 # App ID Photon: свой у каждого, в публичный репозиторий не кладётся
 photon.cfg
+
+# Photon Fusion SDK: проприетарный, распространять нельзя — ставится вручную
+addons/fusion/
