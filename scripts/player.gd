@@ -2,7 +2,7 @@
 ##
 ## Мультиплеер: local_control означает "этим телом управляет мышь и клавиатура
 ## на этой машине". Для чужих игроков он выставляется в false, и тело двигает
-## сеть, а не ввод. Урон в любом случае применяет только сервер (см. damage.gd).
+## сеть, а не ввод. В сети урон применяет владелец цели (см. damage.gd).
 class_name PlayerCharacter
 extends CharacterBody3D
 
@@ -37,6 +37,9 @@ const CROUCH_EYE := 1.05
 @onready var camera: Camera3D = $Head/Camera
 @onready var weapon_pivot: Node3D = $Head/Camera/WeaponPivot
 @onready var body_mesh: MeshInstance3D = $Body
+
+var _body_model: Node3D
+var _body_anim: AnimationPlayer
 @onready var health: Health = $Health
 @onready var weapons: WeaponManager = $WeaponManager
 @onready var economy: Economy = $Economy
@@ -46,6 +49,7 @@ var look_pitch: float = 0.0
 var crouching: bool = false
 ## Пока открыт магазин, цифровые клавиши уходят на покупку.
 var shop_open: bool = false
+var input_enabled: bool = true
 var sprinting: bool = false
 var base_fov: float = 85.0
 
@@ -65,18 +69,36 @@ func _ready() -> void:
 	_set_height(STAND_HEIGHT)
 
 	base_fov = camera.fov
-	camera.current = local_control
-	body_mesh.visible = not local_control
 
 	health.died.connect(_on_died)
 	weapons.recoil_kick.connect(_on_recoil_kick)
 	weapons.setup(self, camera, weapon_pivot)
+	configure_control(local_control)
 
-	if local_control:
+## Вызывается и после сетевого спавна: дочерний _ready раньше родительского.
+func configure_control(mine: bool) -> void:
+	local_control = mine
+	if _capsule == null:
+		return
+	if mine:
+		camera.make_current()
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	elif camera.current:
+		camera.clear_current()
+	if not mine and _body_model == null:
+		_build_body_model()
+	weapons.set_local_visuals(mine)
+	update_life_visuals()
+
+func update_life_visuals() -> void:
+	body_mesh.visible = not local_control and health.alive and _body_model == null
+	if _body_model != null:
+		_body_model.visible = not local_control and health.alive
+	collision_layer = 2 if health.alive else 0
+	collider.set_deferred("disabled", not health.alive)
 
 func _unhandled_input(event: InputEvent) -> void:
-	if not local_control or not health.alive:
+	if not local_control or not health.alive or not input_enabled or shop_open:
 		return
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		var motion := event as InputEventMouseMotion
@@ -89,7 +111,12 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _physics_process(delta: float) -> void:
 	if not local_control:
-		_update_view(delta)
+		head.rotation.x = look_pitch
+		_set_height(lerpf(_capsule.height, CROUCH_HEIGHT if crouching else STAND_HEIGHT, minf(delta * 14.0, 1.0)))
+		update_life_visuals()
+		_animate_body()
+		return
+	if not health.alive:
 		return
 
 	_read_input()
@@ -109,6 +136,11 @@ func _physics_process(delta: float) -> void:
 	weapons.player_tick(delta, _movement_state())
 
 func _read_input() -> void:
+	if not input_enabled or shop_open or Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
+		_input_dir = Vector2.ZERO
+		_wants_jump = false
+		sprinting = false
+		return
 	_input_dir = Input.get_vector("move_left", "move_right", "move_forward", "move_back")
 	_wants_jump = Input.is_action_pressed("jump")
 	sprinting = Input.is_action_pressed("sprint") and not crouching and _input_dir.y < 0.0
@@ -147,7 +179,7 @@ func _target_speed() -> float:
 	return base * weapons.speed_multiplier()
 
 func _update_crouch(delta: float) -> void:
-	var want_crouch := Input.is_action_pressed("crouch")
+	var want_crouch := input_enabled and not shop_open and Input.is_action_pressed("crouch")
 	if not want_crouch and crouching and _blocked_above():
 		want_crouch = true   # встать некуда — остаёмся сидеть
 	crouching = want_crouch
@@ -161,6 +193,8 @@ func _set_height(h: float) -> void:
 	head.position.y = lerpf(CROUCH_EYE, STAND_EYE, t)
 	body_mesh.position.y = h * 0.5
 	body_mesh.scale.y = h / STAND_HEIGHT
+	if _body_model != null:
+		_body_model.scale.y = _body_model.get_meta("stand_scale") * h / STAND_HEIGHT
 
 func _blocked_above() -> bool:
 	var space := get_world_3d().direct_space_state
@@ -238,6 +272,7 @@ func _on_died(attacker: Node) -> void:
 	if local_control:
 		Sfx.play_2d(&"death", 1.0, 2.0)
 	weapons.holster()
+	update_life_visuals()
 	died.emit(attacker)
 
 func respawn(at: Transform3D) -> void:
@@ -249,6 +284,7 @@ func respawn(at: Transform3D) -> void:
 	_recoil_target = Vector2.ZERO
 	health.reset()
 	weapons.reset_loadout()
+	update_life_visuals()
 	respawned.emit()
 
 func _gravity() -> float:
@@ -256,3 +292,32 @@ func _gravity() -> float:
 
 func is_dead() -> bool:
 	return not health.alive
+
+
+## Скин выбирается по идентификатору узла, чтобы два бойца в комнате не
+## оказались одинаковыми.
+func _build_body_model() -> void:
+	if not CharacterModel.available():
+		return
+	const SKINS := ["survivorMaleA", "criminalMaleA", "skaterMaleA", "cyborgFemaleA"]
+	var model := CharacterModel.build(SKINS[abs(peer_id) % SKINS.size()], 1.8)
+	if model == null:
+		return
+	body_mesh.visible = false
+	add_child(model)
+	_body_model = model
+	# У модели Kenney лицо направлено по +Z, у игрового тела вперёд — -Z.
+	model.rotation.y = PI
+	model.set_meta("stand_scale", model.scale.y)
+	_body_anim = model.get_node_or_null("AnimationPlayer")
+	if _body_anim != null and _body_anim.has_animation("idle"):
+		_body_anim.play("idle")
+
+## Чужое тело оживляем простым правилом: бежит или стоит.
+func _animate_body() -> void:
+	if _body_anim == null:
+		return
+	var speed := Vector2(velocity.x, velocity.z).length()
+	var want := "run" if speed > 0.6 else "idle"
+	if _body_anim.current_animation != want and _body_anim.has_animation(want):
+		_body_anim.play(want)

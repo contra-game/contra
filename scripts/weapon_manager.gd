@@ -11,6 +11,7 @@ signal spread_changed(degrees: float)
 signal recoil_kick(pitch_deg: float, yaw_deg: float)
 signal hit_confirmed(headshot: bool, killed: bool)
 signal scope_changed(active: bool)
+signal shot_fired(weapon_id: String, origin: Vector3, end: Vector3)
 
 const SLOT_COUNT := 2
 const HIT_MASK := 1 | 2 | 4        # мир + игроки + боты
@@ -18,6 +19,7 @@ const HIT_MASK := 1 | 2 | 4        # мир + игроки + боты
 ## Положения модели оружия относительно камеры.
 const HIP_POSITION := Vector3(0.18, -0.13, -0.45)
 const AIM_POSITION := Vector3(0.0, -0.05, -0.35)
+
 const SPRINT_POSITION := Vector3(0.22, -0.18, -0.4)
 
 @export var default_primary: StringName = &"ak47"
@@ -44,11 +46,13 @@ var _anim: AnimationPlayer
 var _fire_anim: String = ""
 var _reload_anim: String = ""
 var _scoped: bool = false
+var _local_visuals: bool = true
 
 func setup(body: Node3D, camera: Camera3D, pivot: Node3D) -> void:
 	_owner = body
 	_camera = camera
 	_pivot = pivot
+	_local_visuals = body.local_control
 	slots.resize(SLOT_COUNT)
 	reset_loadout()
 
@@ -69,6 +73,13 @@ func reset_loadout() -> void:
 	give(default_primary, true)
 	give(default_secondary, false)
 	_equip(0, true)
+	scope_changed.emit(false)
+
+func set_local_visuals(enabled: bool) -> void:
+	_local_visuals = enabled
+	_pivot.visible = enabled
+	if enabled and _view_model == null:
+		_build_view_model(current_data())
 
 ## Кладёт ствол в его слот. Если такой же уже есть — только патроны.
 func give(weapon_id: StringName, auto_equip: bool) -> bool:
@@ -91,6 +102,14 @@ func give(weapon_id: StringName, auto_equip: bool) -> bool:
 		_equip(slot, true)
 	return true
 
+func can_receive(weapon_id: StringName) -> bool:
+	var data := Weapons.get_weapon(weapon_id)
+	if data == null:
+		return false
+	var slot: int = 0 if data.slot == WeaponData.Slot.PRIMARY else 1
+	var existing = slots[slot]
+	return existing == null or existing.data.id != data.id or existing.reserve < data.reserve_ammo
+
 func current() -> Dictionary:
 	var slot = slots[current_slot]
 	return slot if slot != null else {}
@@ -107,12 +126,14 @@ func player_tick(delta: float, state: Dictionary) -> void:
 
 	_cooldown = maxf(_cooldown - delta, 0.0)
 	_equip_left = maxf(_equip_left - delta, 0.0)
-	aiming = Input.is_action_pressed("aim") and _equip_left <= 0.0 and not reloading
+	var can_input: bool = _owner.input_enabled and not _owner.shop_open and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
+	aiming = can_input and Input.is_action_pressed("aim") and _equip_left <= 0.0 and not reloading
 	_update_scope()
 
 	_tick_reload(delta)
 	_tick_spread(delta, state)
-	_read_weapon_input(state)
+	if can_input:
+		_read_weapon_input(state)
 	_update_view_model(delta, state)
 
 func _read_weapon_input(state: Dictionary) -> void:
@@ -193,6 +214,8 @@ func _fire_rays(data: WeaponData, state: Dictionary) -> void:
 		var hit := _cast(origin, dir, data.max_range)
 		var end: Vector3 = hit.get("position", origin + dir * data.max_range)
 		Effects.tracer(world, _muzzle_position(), end)
+		if pellet == 0:
+			shot_fired.emit(String(data.id), _muzzle_position(), end)
 		if hit.is_empty():
 			continue
 		_resolve_hit(hit, data, origin, world)
@@ -223,6 +246,8 @@ func _resolve_hit(hit: Dictionary, data: WeaponData, origin: Vector3, world: Nod
 		amount *= data.headshot_multiplier
 
 	var dealt := Damage.apply(body, amount, _owner, headshot, data.armor_penetration)
+	if Damage._net_wrapper(body) != null and not body.local_control:
+		return # Подтверждение попадания придёт от владельца цели.
 	if dealt <= 0.0:
 		return
 
@@ -308,7 +333,9 @@ func _equip(slot_index: int, force: bool) -> void:
 	if slot_index == current_slot and not force:
 		return
 	_cancel_reload()
+	aiming = false
 	current_slot = slot_index
+	_update_scope()
 	var data: WeaponData = slots[slot_index].data
 	_equip_left = data.equip_time
 	_spread = 0.0
@@ -320,6 +347,7 @@ func holster() -> void:
 	_holstered = true
 	aiming = false
 	_cancel_reload()
+	_update_scope()
 	if _view_model != null:
 		_view_model.visible = false
 
@@ -356,7 +384,10 @@ func ammo_text() -> String:
 ## Модель оружия: анимированная из пака, если она указана в WeaponData,
 ## иначе силуэт из примитивов по длине ствола.
 func _build_view_model(data: WeaponData) -> void:
+	if not _local_visuals or data == null:
+		return
 	if _view_model != null:
+		_view_model.visible = false
 		_view_model.queue_free()
 	_view_model = Node3D.new()
 	_pivot.add_child(_view_model)

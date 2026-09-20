@@ -1,0 +1,92 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/menu.gd" id="1_menu"]
+
+[node name="Menu" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_menu")
+
+[node name="Background" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.105882, 0.125490, 0.152941, 1)
+
+[node name="Center" type="CenterContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Panel" type="PanelContainer" parent="Center"]
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+
+[node name="Rows" type="VBoxContainer" parent="Center/Panel"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Title" type="Label" parent="Center/Panel/Rows"]
+layout_mode = 2
+text = "CONTRA CITY"
+horizontal_alignment = 1
+
+[node name="Subtitle" type="Label" parent="Center/Panel/Rows"]
+layout_mode = 2
+text = "альфа"
+horizontal_alignment = 1
+
+[node name="NameRow" type="HBoxContainer" parent="Center/Panel/Rows"]
+layout_mode = 2
+
+[node name="NameLabel" type="Label" parent="Center/Panel/Rows/NameRow"]
+custom_minimum_size = Vector2(90, 0)
+layout_mode = 2
+text = "Имя"
+
+[node name="NameEdit" type="LineEdit" parent="Center/Panel/Rows/NameRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+placeholder_text = "Игрок"
+
+[node name="RoomRow" type="HBoxContainer" parent="Center/Panel/Rows"]
+layout_mode = 2
+
+[node name="RoomLabel" type="Label" parent="Center/Panel/Rows/RoomRow"]
+custom_minimum_size = Vector2(90, 0)
+layout_mode = 2
+text = "Комната"
+
+[node name="RoomEdit" type="LineEdit" parent="Center/Panel/Rows/RoomRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+placeholder_text = "contra-city"
+
+[node name="OnlineButton" type="Button" parent="Center/Panel/Rows"]
+custom_minimum_size = Vector2(0, 42)
+layout_mode = 2
+text = "ИГРАТЬ ПО СЕТИ"
+
+[node name="OfflineButton" type="Button" parent="Center/Panel/Rows"]
+layout_mode = 2
+text = "Офлайн с ботами"
+
+[node name="QuitButton" type="Button" parent="Center/Panel/Rows"]
+layout_mode = 2
+text = "Выход"
+
+[node name="Status" type="Label" parent="Center/Panel/Rows"]
+layout_mode = 2
+text = "готов к бою"
+horizontal_alignment = 1
+autowrap_mode = 3

@@ -1,8 +1,6 @@
 ## Единая точка нанесения урона.
 ##
-## Мультиплеер: урон считает только сервер. В одиночной игре
-## multiplayer.is_server() == true, поэтому тот же код работает локально,
-## а при подключении ENet-пира клиент просто перестанет вредить сам себе.
+## В Photon здоровье меняет владелец цели, в офлайне — локальная симуляция.
 class_name Damage
 extends RefCounted
 
@@ -10,7 +8,7 @@ static func apply(target: Node, amount: float, attacker: Node, headshot: bool, p
 	if target == null or not is_instance_valid(target):
 		return 0.0
 	var hp := find_health(target)
-	if hp == null:
+	if hp == null or not hp.alive:
 		return 0.0
 	if not target.is_inside_tree():
 		return 0.0
@@ -21,9 +19,17 @@ static func apply(target: Node, amount: float, attacker: Node, headshot: bool, p
 	if net != null:
 		if net.replicator.has_authority():
 			return hp.take_damage(amount, attacker, headshot, penetration)
-		var attacker_id: int = attacker.get("peer_id") if attacker != null and attacker.get("peer_id") != null else 0
+		# Стрелять по чужому бойцу может только живой игрок: у ботов нет peer_id,
+		# и звать их выстрелами чужой клиент не должен.
+		if attacker == null or attacker.get("peer_id") == null:
+			return 0.0
+		if not attacker.local_control or not attacker.health.alive:
+			return 0.0
+		# Аргументы уходят списком: Callable.bind() Fusion не понимает и роняет
+		# процесс. Метод живёт на обвязке — это узел с дочерним репликатором,
+		# по нему SDK и находит того же бойца на чужом клиенте.
 		Fusion.rpc_to_player(net.replicator.get_owner_id(),
-			Callable(net, "apply_remote_damage").bind(amount, headshot, attacker_id))
+			net.apply_remote_damage, amount, headshot, penetration, net.life_serial)
 		return amount
 
 	if not target.multiplayer.is_server():
