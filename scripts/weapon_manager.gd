@@ -1,4 +1,4 @@
-## Инвентарь и стрельба: два слота, хитскан с разбросом, отдача, перезарядка.
+## Four-slot inventory, hitscan, melee and throwable state transitions.
 ##
 ## Живёт на игроке, но бот пользуется теми же данными WeaponData через свой
 ## упрощённый код — баланс всегда один и тот же.
@@ -12,13 +12,21 @@ signal recoil_kick(pitch_deg: float, yaw_deg: float)
 signal hit_confirmed(headshot: bool, killed: bool)
 signal scope_changed(active: bool)
 signal shot_fired(weapon_id: String, origin: Vector3, end: Vector3)
+signal equipment_used(weapon_id: String, origin: Vector3, launch_velocity: Vector3)
 
-const SLOT_COUNT := 2
+const SLOT_COUNT := 4
+enum State { READY, FIRING, RELOADING, HOLSTERING, EQUIPPING, DISABLED }
+var state: State = State.READY
+var _pending_slot: int = -1
+var _holster_left: float = 0.0
 const HIT_MASK := 1 | 2 | 4        # мир + игроки + боты
+## Сколько дробин залпа оставляют видимый след.
+const TRACERS_PER_SHOT := 2
+const Spring = preload("res://scripts/viewmodel_spring.gd")
+const WeaponLayer = preload("res://scripts/viewmodel_layer.gd")
 
 ## Положения модели оружия относительно камеры.
 const HIP_POSITION := Vector3(0.18, -0.13, -0.45)
-const AIM_POSITION := Vector3(0.0, -0.05, -0.35)
 
 const SPRINT_POSITION := Vector3(0.22, -0.18, -0.4)
 
@@ -41,19 +49,38 @@ var _equip_left: float = 0.0
 var _trigger_held: bool = false
 var _holstered: bool = false
 var _sway := Vector2.ZERO
-var _kick: float = 0.0
 var _anim: AnimationPlayer
 var _fire_anim: String = ""
 var _reload_anim: String = ""
 var _scoped: bool = false
 var _local_visuals: bool = true
+var _recovery_left: float = 0.0
+var _reload_duration: float = 0.0
+var _stride_phase: float = 0.0
+var _shot_index: int = 0
+var muzzle_marker: Marker3D
+var sight_node: Marker3D
+var ejection_marker: Marker3D
+var ads_blend: float = 0.0
+var _ads_transform := Transform3D.IDENTITY
+var _pose_transform := Transform3D.IDENTITY
+var _position_spring := Spring.new()
+var _rotation_spring := Spring.new()
+var _look_motion := Vector2.ZERO
+var _bob_strength: float = 0.0
+var _rest_nodes: Dictionary = {}
+var _weapon_layer: Node
+var last_grenade: RigidBody3D
 
 func setup(body: Node3D, camera: Camera3D, pivot: Node3D) -> void:
 	_owner = body
 	_camera = camera
 	_pivot = pivot
 	_local_visuals = body.local_control
+	if _local_visuals:
+		_create_weapon_layer()
 	slots.resize(SLOT_COUNT)
+	_owner.health.died.connect(_drop_on_death)
 	reset_loadout()
 
 ## Возрождение выдаёт свежий комплект. Слоты чистятся полностью: give()
@@ -61,34 +88,80 @@ func setup(body: Node3D, camera: Camera3D, pivot: Node3D) -> void:
 ## поэтому после смерти оружие оставалось с теми же патронами, что и было.
 func reset_loadout() -> void:
 	_holstered = false
+	_pending_slot = -1
+	_holster_left = 0.0
+	state = State.READY
 	reloading = false
 	_reload_left = 0.0
 	_cooldown = 0.0
 	_equip_left = 0.0
 	_spread = 0.0
+	_recovery_left = 0.0
+	_shot_index = 0
+	_reset_motion()
+	_sway = Vector2.ZERO
 	_scoped = false
 	for i in SLOT_COUNT:
 		slots[i] = null
 	current_slot = 0
 	give(default_primary, true)
 	give(default_secondary, false)
+	give(&"knife", false)
+	give(&"grenade", false)
 	_equip(0, true)
 	scope_changed.emit(false)
 
 func set_local_visuals(enabled: bool) -> void:
 	_local_visuals = enabled
 	_pivot.visible = enabled
+	if enabled and _weapon_layer == null:
+		_create_weapon_layer()
 	if enabled and _view_model == null:
 		_build_view_model(current_data())
+
+func _create_weapon_layer() -> void:
+	_weapon_layer = WeaponLayer.new()
+	add_child(_weapon_layer)
+	_weapon_layer.setup(_camera)
+
+func _process(delta: float) -> void:
+	if _weapon_layer == null:
+		return
+	if _local_visuals and not _holstered and _owner.is_physics_processing():
+		_update_view_model(delta, _owner._movement_state())
+	_weapon_layer.sync(_local_visuals and not _holstered and not _scoped)
+
+func add_look_motion(motion: Vector2) -> void:
+	_look_motion += motion
+
+func add_landing_impact(speed: float) -> void:
+	var strength := clampf((speed - 3.0) * 0.12, 0.0, 1.4)
+	_position_spring.impulse(Vector3(0.0, -strength, strength * 0.2))
+	_rotation_spring.impulse(Vector3(-strength * 0.4, 0, strength * 0.08))
+
+func _reset_motion() -> void:
+	_position_spring.reset()
+	_rotation_spring.reset()
+	ads_blend = 0.0
+	_look_motion = Vector2.ZERO
+	_sway = Vector2.ZERO
+	_bob_strength = 0.0
 
 ## Кладёт ствол в его слот. Если такой же уже есть — только патроны.
 func give(weapon_id: StringName, auto_equip: bool) -> bool:
 	var data: WeaponData = Weapons.get_weapon(weapon_id)
 	if data == null:
 		return false
-	var slot: int = 0 if data.slot == WeaponData.Slot.PRIMARY else 1
+	var slot: int = int(data.slot)
 	var existing = slots[slot]
 	if existing != null and existing.data.id == data.id:
+		if not data.is_firearm():
+			if existing.mag >= data.magazine:
+				return false
+			existing.mag = data.magazine
+			if slot == current_slot:
+				ammo_changed.emit(existing.mag, existing.reserve)
+			return true
 		var before: int = existing.reserve
 		existing.reserve = mini(existing.reserve + data.magazine, data.reserve_ammo)
 		if existing.reserve == before:
@@ -106,9 +179,9 @@ func can_receive(weapon_id: StringName) -> bool:
 	var data := Weapons.get_weapon(weapon_id)
 	if data == null:
 		return false
-	var slot: int = 0 if data.slot == WeaponData.Slot.PRIMARY else 1
+	var slot: int = int(data.slot)
 	var existing = slots[slot]
-	return existing == null or existing.data.id != data.id or existing.reserve < data.reserve_ammo
+	return existing == null or existing.data.id != data.id or (existing.reserve < data.reserve_ammo if data.is_firearm() else existing.mag < data.magazine)
 
 func current() -> Dictionary:
 	var slot = slots[current_slot]
@@ -124,17 +197,42 @@ func player_tick(delta: float, state: Dictionary) -> void:
 	if _holstered:
 		return
 
-	_cooldown = maxf(_cooldown - delta, 0.0)
+	# Сохраняем остаток кадра: 720 RPM не должны превращаться в 600 при 60 Гц.
+	_cooldown = maxf(_cooldown - delta, -delta)
 	_equip_left = maxf(_equip_left - delta, 0.0)
+	if _pending_slot >= 0:
+		_holster_left -= delta
+		if _holster_left <= 0.0:
+			var next := _pending_slot
+			_pending_slot = -1
+			_equip(next, true)
 	var can_input: bool = _owner.input_enabled and not _owner.shop_open and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
-	aiming = can_input and Input.is_action_pressed("aim") and _equip_left <= 0.0 and not reloading
+	aiming = can_input and current_data() != null and current_data().is_firearm() and Input.is_action_pressed("aim") and _equip_left <= 0.0 and _pending_slot < 0 and not reloading
 	_update_scope()
 
 	_tick_reload(delta)
 	_tick_spread(delta, state)
 	if can_input:
 		_read_weapon_input(state)
-	_update_view_model(delta, state)
+	_update_scope()
+	var data := current_data()
+	if data != null:
+		spread_changed.emit(_current_spread(data, state))
+	_update_state()
+
+func _update_state() -> void:
+	if _holstered:
+		state = State.DISABLED
+	elif _pending_slot >= 0:
+		state = State.HOLSTERING
+	elif _equip_left > 0.0:
+		state = State.EQUIPPING
+	elif reloading:
+		state = State.RELOADING
+	elif _cooldown > 0.0:
+		state = State.FIRING
+	else:
+		state = State.READY
 
 func _read_weapon_input(state: Dictionary) -> void:
 	# Цифры при открытом магазине тратятся на покупку.
@@ -143,10 +241,16 @@ func _read_weapon_input(state: Dictionary) -> void:
 			_equip(0, false)
 		elif Input.is_action_just_pressed("slot_2"):
 			_equip(1, false)
+		elif Input.is_action_just_pressed("slot_3"):
+			_equip(2, false)
+		elif Input.is_action_just_pressed("slot_4"):
+			_equip(3, false)
 		elif Input.is_action_just_pressed("slot_next"):
-			_equip((current_slot + 1) % SLOT_COUNT, false)
+			_cycle_slot(1)
 		elif Input.is_action_just_pressed("slot_prev"):
-			_equip((current_slot + SLOT_COUNT - 1) % SLOT_COUNT, false)
+			_cycle_slot(-1)
+		elif Input.is_action_just_pressed("drop_weapon"):
+			drop_current()
 
 	if Input.is_action_just_pressed("reload"):
 		start_reload()
@@ -163,13 +267,19 @@ func _read_weapon_input(state: Dictionary) -> void:
 
 func _try_fire(state: Dictionary) -> void:
 	var slot = slots[current_slot]
-	if slot == null or _cooldown > 0.0 or _equip_left > 0.0:
+	if _holstered or _pending_slot >= 0 or not _owner.health.alive or slot == null or _cooldown > 0.00001 or _equip_left > 0.0:
 		return
 	var data: WeaponData = slot.data
+	var match_flow := get_tree().get_first_node_in_group("match_flow")
+	if match_flow != null and not match_flow.allows_combat():
+		return
+	if not data.is_firearm():
+		_fire_equipment(data)
+		return
 
 	if reloading:
-		# Болтовки и дробовики прерывают перезарядку выстрелом — привычно по CS.
-		if slot.mag > 0:
+		# Уже вставленные патроны дробовика сохраняются при прерывании.
+		if data.reload_per_shell and slot.mag > 0:
 			_cancel_reload()
 		else:
 			return
@@ -182,20 +292,27 @@ func _try_fire(state: Dictionary) -> void:
 		return
 
 	slot.mag -= 1
-	_cooldown = data.seconds_per_shot()
+	_cooldown = maxf(_cooldown, -0.05) + data.seconds_per_shot()
 	ammo_changed.emit(slot.mag, slot.reserve)
 
 	_fire_rays(data, state)
 
-	# Отдача: вверх всегда, вбок — случайно в обе стороны.
-	var side := data.recoil_side * randf_range(-1.0, 1.0)
-	var aim_mult: float = 0.7 if aiming else 1.0
+	# Повторяемый рисунок очереди можно освоить и компенсировать мышью.
+	var side := data.recoil_side * sin(float(_shot_index) * 1.7)
+	_shot_index += 1
+	var aim_mult := lerpf(1.0, 0.7, ads_blend)
 	recoil_kick.emit(data.recoil_up * aim_mult, side * aim_mult)
 	_spread = minf(_spread + data.spread_per_shot, data.spread_max)
-	_kick = 1.0
+	_recovery_left = data.spread_recovery_delay
+	var impulse_scale := (0.6 + data.recoil_up * 0.25) * lerpf(1.0, 0.35, ads_blend)
+	_position_spring.impulse(Vector3(0.0, 0.12, 1.8) * impulse_scale)
+	_rotation_spring.impulse(Vector3(1.0, side * 0.12, -side * 0.16) * impulse_scale)
 
 	Sfx.play_shot(data.id, _muzzle_position(), data.shot_pitch)
-	Effects.muzzle_flash(_pivot, Vector3(0, 0, -data.length))
+	if is_instance_valid(ejection_marker):
+		Effects.casing(_owner.get_tree().current_scene, ejection_marker.global_transform, data.pellets > 1)
+	if muzzle_marker != null:
+		Effects.muzzle_flash(muzzle_marker, Vector3.ZERO, WeaponLayer.MASK, 0.8 + data.recoil_up * 0.16)
 	# Анимация выстрела ужимается под скорострельность, иначе на автомате
 	# она не успевает доиграть и ствол «залипает».
 	_play_anim(_fire_anim, minf(_cooldown * 0.95, 0.35))
@@ -217,7 +334,10 @@ func _fire_rays(data: WeaponData, state: Dictionary) -> void:
 		var dir := _spread_direction(forward, spread_deg)
 		var hit := _cast(origin, dir, data.max_range)
 		var end: Vector3 = hit.get("position", origin + dir * data.max_range)
-		Effects.tracer(world, muzzle, end)
+		# Девять следов от одного залпа дроби закрывают собой саму цель.
+		if pellet < TRACERS_PER_SHOT:
+			Effects.tracer(world, muzzle, end)
+		Effects.physical_hit(_owner, origin, end, minf(data.damage * 0.08, 6.0) / float(data.pellets))
 		if pellet == 0:
 			shot_fired.emit(String(data.id), muzzle, end)
 		if hit.is_empty():
@@ -227,32 +347,107 @@ func _fire_rays(data: WeaponData, state: Dictionary) -> void:
 	for target in tally:
 		_apply_tally(target, data, tally[target])
 
+func _fire_equipment(data: WeaponData) -> void:
+	var origin := _camera.global_position
+	var forward := -_camera.global_basis.z
+	if data.slot == WeaponData.Slot.GRENADE:
+		if current().mag <= 0:
+			return
+		current().mag -= 1
+		ammo_changed.emit(current().mag, current().reserve)
+		var launch: Vector3 = forward * 16.0 + Vector3.UP * 3.0 + _owner.velocity * 0.4
+		last_grenade = preload("res://scripts/thrown_grenade.gd").launch(_owner.get_tree().current_scene, _owner, origin, launch)
+		equipment_used.emit(String(data.id), origin, launch)
+		Sfx.play_2d(&"grenade", 1.0, -3.0)
+	else:
+		var hit := _cast(origin, forward, data.max_range)
+		var tally: Dictionary = {}
+		if not hit.is_empty():
+			_tally_hit(hit, data, origin, _owner.get_tree().current_scene, tally)
+		for target in tally:
+			_apply_tally(target, data, tally[target])
+		equipment_used.emit(String(data.id), origin, forward)
+		Sfx.play_3d(&"melee", origin, 1.0, -4.0, 14.0)
+	_cooldown = data.seconds_per_shot()
+	_position_spring.impulse(Vector3(-0.7, 0.3, -2.8))
+	_rotation_spring.impulse(Vector3(-1.8, 2.5, -1.0))
+	_update_state()
+
+func _cycle_slot(direction: int) -> void:
+	for step in range(1, SLOT_COUNT + 1):
+		var index := posmod(current_slot + step * direction, SLOT_COUNT)
+		if slots[index] != null:
+			_equip(index, false)
+			return
+
+## Exact magazine/reserve survives a drop. Taking a duplicate only transfers
+## the ammunition that fits; the remainder stays on the ground.
+func receive_drop(id: StringName, mag: int, reserve: int) -> Vector2i:
+	var data := Weapons.get_weapon(id)
+	if data == null or not data.is_firearm():
+		return Vector2i(mag, reserve)
+	var previous = slots[int(data.slot)]
+	if previous != null and previous.data.id == id:
+		var taken := mini(mag + reserve, data.reserve_ammo - int(previous.reserve))
+		previous.reserve += taken
+		if current_slot == int(data.slot):
+			ammo_changed.emit(previous.mag, previous.reserve)
+		var left := mag + reserve - taken
+		return Vector2i(mini(mag, left), maxi(left - mag, 0))
+	if previous != null:
+		_spawn_drop(previous)
+	slots[int(data.slot)] = {"data": data, "mag": clampi(mag, 0, data.magazine), "reserve": clampi(reserve, 0, data.reserve_ammo)}
+	_equip(int(data.slot), true)
+	return Vector2i.ZERO
+
+func _spawn_drop(slot: Dictionary) -> void:
+	if not _owner.local_control or not slot.data.is_firearm():
+		return
+	var at := Transform3D(_owner.global_basis, _owner.global_position + Vector3.UP * 1.1)
+	var motion: Vector3 = _owner.velocity - _owner.global_basis.z * 2.0 + Vector3.UP
+	if Session.is_online():
+		var inventory := get_tree().get_first_node_in_group("world_inventory")
+		if inventory != null:
+			inventory.request_drop(String(slot.data.id), slot.mag, slot.reserve, at, motion)
+	else:
+		WeaponPickup.spawn_drop(_owner.get_tree().current_scene, slot.data.id, slot.mag, slot.reserve, at, motion)
+
+func drop_current() -> void:
+	var data := current_data()
+	if data == null or not data.is_firearm() or _holstered:
+		return
+	_spawn_drop(current())
+	slots[current_slot] = null
+	_cancel_reload()
+	_equip(int(WeaponData.Slot.MELEE), true)
+
+func _drop_on_death(_attacker: Node) -> void:
+	for slot in slots:
+		if slot != null:
+			_spawn_drop(slot)
+
 func _cast(origin: Vector3, dir: Vector3, distance: float) -> Dictionary:
 	var space := _owner.get_world_3d().direct_space_state
-	var query := PhysicsRayQueryParameters3D.create(origin, origin + dir * distance)
-	query.collision_mask = HIT_MASK
-	query.exclude = [_owner.get_rid()]
-	return space.intersect_ray(query)
+	return Damage.raycast(space, origin, origin + dir * distance, _owner)
 
 ## Эффекты рисуются на каждую дробину, урон только копится.
 func _tally_hit(hit: Dictionary, data: WeaponData, origin: Vector3, world: Node, tally: Dictionary) -> void:
 	var point: Vector3 = hit.position
-	var body: Node = hit.collider
+	var body: Node = Damage.resolve_target(hit.collider)
 	var target_health := Damage.find_health(body)
 	# Труп — не плоть: иначе выстрел в него глотается кровавыми искрами вместо
 	# отметины на поверхности.
 	var is_flesh := target_health != null and target_health.alive
 
-	Effects.impact(world, point, hit.normal, is_flesh)
+	Effects.impact(world, point, hit.normal, is_flesh, body)
+	if body is RigidBody3D:
+		body.apply_impulse(origin.direction_to(point) * minf(data.damage * 0.08, 6.0), point - body.global_position)
 	if not is_flesh:
-		Sfx.play_3d(&"step", point, randf_range(1.4, 1.8), -6.0, 40.0)
 		return
 
-	var crouched: bool = body.get("crouching") if body.get("crouching") != null else false
-	var headshot := Damage.is_headshot(body, point, crouched)
-	var amount := data.damage_at(origin.distance_to(point))
-	if headshot:
-		amount *= data.headshot_multiplier
+	var zone := Damage.hit_zone(hit.collider, point)
+	var headshot := zone == &"head"
+	var amount := data.damage_at(origin.distance_to(point)) * Damage.zone_multiplier(data, zone)
 
 	var row: Dictionary = tally.get(body, {"amount": 0.0, "headshot": false})
 	row.amount += amount
@@ -270,17 +465,20 @@ func _apply_tally(body: Node, data: WeaponData, row: Dictionary) -> void:
 		return
 	var target_health := Damage.find_health(body)
 	var killed := target_health != null and not target_health.alive
-	Sfx.play_2d(&"headshot" if headshot else &"hit", 1.0, -4.0)
+	Sfx.play_2d(&"kill" if killed else (&"headshot" if headshot else &"hit"), 1.0, -4.0)
 	hit_confirmed.emit(headshot, killed)
 
 # --- разброс и перезарядка ---------------------------------------------------
 
-func _tick_spread(delta: float, state: Dictionary) -> void:
+func _tick_spread(delta: float, _state: Dictionary) -> void:
 	var data := current_data()
 	if data == null:
 		return
-	_spread = maxf(_spread - data.spread_recovery * delta, 0.0)
-	spread_changed.emit(_current_spread(data, state))
+	var recovery_delta := maxf(delta - _recovery_left, 0.0)
+	_recovery_left = maxf(_recovery_left - delta, 0.0)
+	_spread = maxf(_spread - data.spread_recovery * recovery_delta, 0.0)
+	if _spread <= 0.0 and _recovery_left <= 0.0:
+		_shot_index = 0
 
 ## Итоговый разброс: база + движение + прыжок, с поправкой на присед и прицел.
 func _current_spread(data: WeaponData, state: Dictionary) -> float:
@@ -292,7 +490,7 @@ func _current_spread(data: WeaponData, state: Dictionary) -> float:
 	if state.get("crouching", false):
 		spread *= data.spread_crouch_mult
 	if aiming:
-		spread *= data.spread_aim_mult
+		spread *= lerpf(1.0, data.spread_aim_mult, ads_blend)
 	return spread
 
 func _spread_direction(forward: Vector3, spread_deg: float) -> Vector3:
@@ -310,16 +508,20 @@ func _spread_direction(forward: Vector3, spread_deg: float) -> Vector3:
 
 func start_reload() -> void:
 	var slot = slots[current_slot]
-	if slot == null or reloading or _equip_left > 0.0:
+	if _holstered or slot == null or reloading or _equip_left > 0.0 or _pending_slot >= 0:
 		return
 	var data: WeaponData = slot.data
+	if not data.is_firearm():
+		return
 	if slot.mag >= data.magazine or slot.reserve <= 0:
 		return
 	reloading = true
-	_reload_left = data.reload_time
+	_reload_duration = data.shell_reload_time if data.reload_per_shell else data.reload_time
+	_reload_left = _reload_duration
 	aiming = false
+	_update_scope()
 	Sfx.play_2d(&"reload", 1.0, -2.0)
-	_animate_reload(data.reload_time)
+	_animate_reload(_reload_duration)
 
 func _tick_reload(delta: float) -> void:
 	if not reloading:
@@ -327,11 +529,27 @@ func _tick_reload(delta: float) -> void:
 	_reload_left -= delta
 	if _reload_left > 0.0:
 		return
-	reloading = false
 	var slot = slots[current_slot]
 	if slot == null:
+		_cancel_reload()
 		return
 	var data: WeaponData = slot.data
+	if data.reload_per_shell:
+		# Учитываем остаток времени, чтобы низкая частота кадров не теряла патроны.
+		while _reload_left <= 0.0 and slot.mag < data.magazine and slot.reserve > 0:
+			slot.mag += 1
+			slot.reserve -= 1
+			_reload_left += maxf(data.shell_reload_time, 0.05)
+		Sfx.play_2d(&"reload", 1.2, -4.0)
+		ammo_changed.emit(slot.mag, slot.reserve)
+		if slot.mag >= data.magazine or slot.reserve <= 0:
+			_cancel_reload()
+		else:
+			_animate_reload(_reload_left)
+		return
+	_restore_weapon_pose()
+	reloading = false
+	_reload_left = 0.0
 	var needed: int = data.magazine - slot.mag
 	var taken: int = mini(needed, slot.reserve)
 	slot.mag += taken
@@ -340,8 +558,13 @@ func _tick_reload(delta: float) -> void:
 	ammo_changed.emit(slot.mag, slot.reserve)
 
 func _cancel_reload() -> void:
+	if reloading:
+		_restore_weapon_pose()
 	reloading = false
 	_reload_left = 0.0
+
+func reload_progress() -> float:
+	return clampf(1.0 - _reload_left / maxf(_reload_duration, 0.001), 0.0, 1.0) if reloading else 0.0
 
 func _equip(slot_index: int, force: bool) -> void:
 	if slot_index < 0 or slot_index >= SLOT_COUNT:
@@ -350,6 +573,14 @@ func _equip(slot_index: int, force: bool) -> void:
 		return
 	if slot_index == current_slot and not force:
 		return
+	if not force:
+		_cancel_reload()
+		aiming = false
+		_pending_slot = slot_index
+		_holster_left = 0.16
+		_update_state()
+		return
+	_pending_slot = -1
 	_cancel_reload()
 	aiming = false
 	current_slot = slot_index
@@ -357,17 +588,24 @@ func _equip(slot_index: int, force: bool) -> void:
 	var data: WeaponData = slots[slot_index].data
 	_equip_left = data.equip_time
 	_spread = 0.0
+	_recovery_left = 0.0
+	_shot_index = 0
+	_reset_motion()
 	_build_view_model(data)
 	weapon_changed.emit(data)
 	ammo_changed.emit(slots[slot_index].mag, slots[slot_index].reserve)
+	_update_state()
 
 func holster() -> void:
 	_holstered = true
+	_pending_slot = -1
+	state = State.DISABLED
 	aiming = false
 	_cancel_reload()
 	_update_scope()
 	if _view_model != null:
 		_view_model.visible = false
+	_reset_motion()
 
 # --- то, что спрашивает игрок ------------------------------------------------
 
@@ -408,8 +646,15 @@ func _build_view_model(data: WeaponData) -> void:
 		_view_model.visible = false
 		_view_model.queue_free()
 	_view_model = Node3D.new()
+	_view_model.name = "Viewmodel"
 	_pivot.add_child(_view_model)
 	_anim = null
+	_fire_anim = ""
+	_reload_anim = ""
+	muzzle_marker = null
+	sight_node = null
+	ejection_marker = null
+	_rest_nodes.clear()
 
 	if data.model_path != "" and ResourceLoader.exists(data.model_path):
 		var scene: PackedScene = load(data.model_path)
@@ -421,18 +666,60 @@ func _build_view_model(data: WeaponData) -> void:
 			_view_model.add_child(holder)
 			holder.add_child(model)
 			ViewModel.fit(holder, model, data)
-			ViewModel.attach_hands(_view_model, data)
+			for node in ViewModel.walk(model):
+				if node is Node3D:
+					_rest_nodes[node] = node.transform
+			ViewModel.attach_hands(_view_model, data, model)
 			_anim = _find_animation_player(model)
 			_fire_anim = _resolve_anim(data.anim_fire, ["FireWBullet", "Fire"])
 			_reload_anim = _resolve_anim(data.anim_reload, ["Reload"])
+			_prepare_fire_animation()
 			for node in _walk(model):
 				if node is GeometryInstance3D:
 					node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			_view_model.position = HIP_POSITION
-			_view_model.rotation = Vector3(0.0, -0.07, 0.0)
+			_finish_view_model(model, data)
 			return
 
 	_build_primitive_model(data)
+	_finish_view_model(null, data)
+
+func _finish_view_model(model: Node3D, data: WeaponData) -> void:
+	_view_model.transform = Transform3D.IDENTITY
+	var markers := ViewModel.attach_markers(_view_model, model, data)
+	muzzle_marker = markers[0]
+	sight_node = markers[1]
+	ejection_marker = markers[2]
+	var sight_rest := _view_model.global_transform.affine_inverse() * sight_node.global_transform
+	sight_rest.basis = sight_rest.basis.orthonormalized()
+	_ads_transform = Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, -data.ads_eye_distance)) * sight_rest.affine_inverse()
+	_pose_transform = Transform3D(Basis.from_euler(Vector3(0.35, -0.07, 0.0)), HIP_POSITION + Vector3(0, -0.18, 0.08))
+	_view_model.transform = _pose_transform
+	WeaponLayer.tag(_view_model)
+
+## Запечённый клип оставляем для затвора/спуска. Движение всего оружия делает
+## пружина, иначе две независимые отдачи уводят мушку и маркер в разные стороны.
+func _prepare_fire_animation() -> void:
+	if _anim == null or _fire_anim.is_empty():
+		return
+	var clip: Animation = _anim.get_animation(_fire_anim).duplicate()
+	for track in range(clip.get_track_count() - 1, -1, -1):
+		var path := clip.track_get_path(track)
+		if path.get_subname_count() == 0 or path.get_subname(0) == "Control":
+			clip.remove_track(track)
+	clip.loop_mode = Animation.LOOP_NONE
+	var library := AnimationLibrary.new()
+	library.add_animation("fire", clip)
+	_anim.add_animation_library("viewmodel", library)
+	_fire_anim = "viewmodel/fire"
+
+func _restore_weapon_pose() -> void:
+	if _anim != null:
+		_anim.stop()
+	for node in _rest_nodes:
+		node.transform = _rest_nodes[node]
+		if node is Skeleton3D:
+			node.reset_bone_poses()
+			node.force_update_all_bone_transforms()
 
 func _build_primitive_model(data: WeaponData) -> void:
 
@@ -445,6 +732,22 @@ func _build_primitive_model(data: WeaponData) -> void:
 	dark.albedo_color = data.body_color.darkened(0.45)
 	dark.metallic = 0.5
 	dark.roughness = 0.5
+	if not data.is_firearm():
+		ViewModel.attach_hands(_view_model, data)
+		if data.slot == WeaponData.Slot.MELEE:
+			_add_box(Vector3(0.027, 0.035, 0.12), Vector3(0, 0, 0), dark)
+			_add_box(Vector3(0.07, 0.012, 0.025), Vector3(0, 0.018, -0.08), dark)
+			_add_box(Vector3(0.04, 0.007, 0.22), Vector3(0, 0.02, -0.19), mat)
+		else:
+			var sphere := MeshInstance3D.new()
+			var mesh := SphereMesh.new()
+			mesh.radius = 0.047
+			mesh.height = 0.12
+			sphere.mesh = mesh
+			sphere.material_override = mat
+			_view_model.add_child(sphere)
+			_add_box(Vector3(0.02, 0.025, 0.04), Vector3(0, 0.07, 0), dark)
+		return
 
 	# Пропорции считаются от длины ствола; модель начинается у казённика
 	# и уходит вперёд, иначе у камеры (near = 5 см) она выглядит бревном.
@@ -474,33 +777,48 @@ func _add_box(size: Vector3, offset: Vector3, mat: Material) -> void:
 func _update_view_model(delta: float, state: Dictionary) -> void:
 	if _view_model == null:
 		return
-	if _scoped:
+	var data := current_data()
+	if data == null:
 		return
-	_view_model.visible = true
-	_kick = lerpf(_kick, 0.0, delta * 12.0)
+	ads_blend = lerpf(ads_blend, 1.0 if aiming else 0.0, 1.0 - exp(-data.ads_speed * delta))
+	_update_scope()
+	_view_model.visible = not _scoped and not _holstered
 
-	# Прицеливание подтягивает ствол к центру экрана, бег — уводит вбок.
+	# Базовая поза не содержит пружину: накопление ошибки transform исключено.
 	var target_pos := HIP_POSITION
-	var target_rot := Vector3.ZERO
-	if aiming:
-		target_pos = AIM_POSITION
-	elif state.get("sprinting", false) and state.get("speed", 0.0) > 4.0:
+	var target_rot := Vector3(0.0, -0.07, 0.0)
+	if not aiming and state.get("sprinting", false) and state.get("speed", 0.0) > 4.0:
 		target_pos = SPRINT_POSITION
 		target_rot = Vector3(0.0, -0.5, 0.35)
 	if reloading:
-		target_pos += Vector3(0.0, -0.12, 0.06)
-		target_rot += Vector3(0.6, 0.0, 0.0)
+		var reload_arc := sin(reload_progress() * PI)
+		target_pos += Vector3(0.0, -0.07 - reload_arc * 0.03, 0.03)
+		target_rot += Vector3(0.15, 0.0, -reload_arc * 0.12)
+	if _equip_left > 0.0:
+		var draw_amount := clampf(_equip_left / maxf(data.equip_time, 0.001), 0.0, 1.0)
+		target_pos += Vector3(0.0, -0.22, 0.12) * draw_amount
+		target_rot.x += 0.45 * draw_amount
+	if _pending_slot >= 0:
+		var lower := 1.0 - clampf(_holster_left / 0.16, 0.0, 1.0)
+		target_pos += Vector3(0, -0.25, 0.12) * lower
+		target_rot.x += lower * 0.5
+	var target := Transform3D(Basis.from_euler(target_rot), target_pos)
+	target = target.interpolate_with(_ads_transform, ads_blend)
+	_pose_transform = _pose_transform.interpolate_with(target, 1.0 - exp(-22.0 * delta))
 
-	# Небольшое запаздывание модели за поворотом мыши.
-	var mouse_delta := Input.get_last_mouse_velocity() * 0.000018
-	_sway = _sway.lerp(Vector2(clampf(mouse_delta.x, -0.05, 0.05), clampf(mouse_delta.y, -0.05, 0.05)), delta * 6.0)
-
-	target_pos += Vector3(-_sway.x, -_sway.y, _kick * 0.06)
-	target_rot += Vector3(_kick * 0.12, _sway.x * 2.0, 0.0)
-
-	var t := clampf(delta * 14.0, 0.0, 1.0)
-	_view_model.position = _view_model.position.lerp(target_pos, t)
-	_view_model.rotation = _view_model.rotation.lerp(target_rot, t)
+	var speed: float = state.get("speed", 0.0)
+	_stride_phase += speed * delta * 1.8
+	var bob_amount := clampf(speed / 5.4, 0.0, 1.5) if state.get("on_floor", true) else 0.0
+	_bob_strength = lerpf(_bob_strength, bob_amount, 1.0 - exp(-10.0 * delta))
+	var steadiness := lerpf(1.0, 0.035, ads_blend)
+	var bob := Vector3(sin(_stride_phase) * 0.009, cos(_stride_phase * 2.0) * 0.008, 0.0) * _bob_strength * steadiness
+	var mouse_speed := _look_motion / maxf(delta, 0.001) * 0.000018
+	_look_motion = Vector2.ZERO
+	_sway = _sway.lerp(mouse_speed.clamp(Vector2(-0.04, -0.04), Vector2(0.04, 0.04)), 1.0 - exp(-10.0 * delta))
+	var offset := _position_spring.step(delta) + bob + Vector3(-_sway.x, _sway.y, 0.0) * steadiness
+	var angles := _rotation_spring.step(delta) + Vector3(_sway.y, -_sway.x, -_sway.x * 0.3) * steadiness
+	_view_model.transform = _pose_transform * Transform3D(Basis.from_euler(angles), offset)
+	ViewModel.update_hands(_view_model)
 
 func _find_animation_player(root: Node) -> AnimationPlayer:
 	for node in _walk(root):
@@ -545,24 +863,18 @@ func _play_anim(anim_name: String, duration: float) -> bool:
 	return true
 
 func _animate_reload(duration: float) -> void:
-	if _play_anim(_reload_anim, duration):
-		return
-	if _view_model == null:
-		return
-	var tween := _view_model.create_tween()
-	tween.tween_property(_view_model, "rotation:x", 0.7, duration * 0.3)
-	tween.tween_interval(duration * 0.35)
-	tween.tween_property(_view_model, "rotation:x", 0.0, duration * 0.35)
+	# Только внутренние кости: внешний transform обновляет _update_view_model.
+	_play_anim(_reload_anim, duration)
 
 func _muzzle_position() -> Vector3:
-	var data := current_data()
-	var length: float = data.length if data != null else 0.6
-	return _camera.global_position - _camera.global_transform.basis.z * (length + 0.2) - _camera.global_transform.basis.y * 0.08
+	if is_instance_valid(muzzle_marker):
+		return muzzle_marker.global_position
+	return _camera.global_position
 
 ## Оптика: в прицеливании модель убирается с экрана, вместо неё окуляр.
 func _update_scope() -> void:
 	var data := current_data()
-	var active: bool = aiming and data != null and data.has_scope
+	var active: bool = aiming and ads_blend > 0.94 and data != null and data.has_scope
 	if active == _scoped:
 		return
 	_scoped = active

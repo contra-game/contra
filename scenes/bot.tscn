@@ -1,7 +1,8 @@
-[gd_scene load_steps=6 format=3]
+[gd_scene load_steps=7 format=3]
 
 [ext_resource type="Script" path="res://scripts/bot.gd" id="1_bot"]
 [ext_resource type="Script" path="res://scripts/health.gd" id="2_health"]
+[ext_resource type="Script" path="res://scripts/combat_hitboxes.gd" id="3_hitboxes"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_bot"]
 radius = 0.4
@@ -40,3 +41,6 @@ mesh = SubResource("CapsuleMesh_bot")
 
 [node name="Health" type="Node" parent="."]
 script = ExtResource("2_health")
+
+[node name="Hitboxes" type="Node3D" parent="."]
+script = ExtResource("3_hitboxes")

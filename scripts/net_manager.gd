@@ -24,7 +24,7 @@ signal kill_confirmed(victim_name: String, headshot: bool)
 signal death_announced(victim_name: String, killer_name: String, headshot: bool)
 signal connection_lost()
 
-const APP_VERSION := "0.3"
+const APP_VERSION := "0.4"
 const PLAYER_SCENE := preload("res://scenes/net_player.tscn")
 
 var spawner: FusionSpawner
@@ -75,6 +75,9 @@ func _grant_pickup(index: int, sender: int) -> void:
 	for actor in get_tree().get_nodes_in_group("combatants"):
 		if actor is PlayerCharacter and actor.peer_id == sender and actor.health.alive:
 			if actor.global_position.distance_to(pickup.global_position) > 3.8:
+				return
+			var sight := PhysicsRayQueryParameters3D.create(actor.global_position + Vector3.UP * 1.4, pickup.global_position, 1)
+			if not actor.get_world_3d().direct_space_state.intersect_ray(sight).is_empty():
 				return
 			_pickup_expiry[index] = now + pickup.respawn_delay
 			NetApi.set_room_property("pickup_%d" % index, _pickup_expiry[index])

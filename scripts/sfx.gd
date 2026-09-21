@@ -13,6 +13,9 @@ const WEAPON_SFX_VARIANTS := 2
 
 const POOL_3D := 24
 const POOL_2D := 8
+const OCCLUDED_BUS := &"CombatOccluded"
+const OCCLUSION_INTERVAL := 0.12
+const OCCLUSION_LOSS_DB := -12.0
 
 var _bank: Dictionary = {}
 var _weapon_shots: Dictionary = {}     # StringName -> Array[AudioStream]
@@ -21,6 +24,8 @@ var _pool_3d: Array[AudioStreamPlayer3D] = []
 var _pool_2d: Array[AudioStreamPlayer] = []
 var _next_3d: int = 0
 var _next_2d: int = 0
+var _occlusion_clock := 0.0
+var _scene_id := 0
 
 func _ready() -> void:
 	_rng.randomize()
@@ -32,6 +37,17 @@ func _ready() -> void:
 	_bank["step"] = _render(_gen_step, 0.10, 0.6)
 	_bank["death"] = _render(_gen_death, 0.45, 0.3)
 	_bank["pickup"] = _render(_gen_pickup, 0.20, 0.0)
+	_bank["impact_metal"] = _render(_gen_metal, 0.25, 0.0)
+	_bank["impact_stone"] = _render(_gen_stone, 0.16, 0.0)
+	_bank["casing"] = _render(_gen_casing, 0.16, 0.0)
+	_bank["step_concrete"] = _bank["step"]
+	_bank["step_metal"] = _render(_gen_step_metal, 0.17, 0.1)
+	_bank["step_earth"] = _render(_gen_step_earth, 0.16, 0.7)
+	_bank["kill"] = _render(_gen_kill, 0.28, 0.0)
+	_bank["melee"] = _render(_gen_melee, 0.22, 0.45)
+	_bank["grenade"] = _render(_gen_grenade, 0.20, 0.15)
+	_bank["explosion"] = _render(_gen_explosion, 0.95, 0.5)
+	_setup_occlusion_bus()
 
 	# Пул вместо узла на каждый звук: восемь ботов с автоматами создавали и
 	# освобождали десятки AudioStreamPlayer3D в секунду. Узлы живут под
@@ -45,6 +61,70 @@ func _ready() -> void:
 		var p2 := AudioStreamPlayer.new()
 		add_child(p2)
 		_pool_2d.append(p2)
+
+func _setup_occlusion_bus() -> void:
+	if AudioServer.get_bus_index(OCCLUDED_BUS) >= 0:
+		return
+	var index := AudioServer.bus_count
+	AudioServer.add_bus(index)
+	AudioServer.set_bus_name(index, OCCLUDED_BUS)
+	AudioServer.set_bus_send(index, &"Master")
+	var filter := AudioEffectLowPassFilter.new()
+	filter.cutoff_hz = 1600.0
+	filter.resonance = 0.5
+	AudioServer.add_bus_effect(index, filter)
+
+func _physics_process(delta: float) -> void:
+	var scene := get_tree().current_scene
+	var current_id := scene.get_instance_id() if is_instance_valid(scene) else 0
+	if current_id != _scene_id:
+		# Scene ownership is recorded on each voice: a shot started from _ready
+		# in the new scene must not be stopped together with the previous match.
+		for voice in _pool_3d:
+			if voice.get_meta("scene_id", current_id) != current_id:
+				voice.stop()
+		_scene_id = current_id
+	_occlusion_clock -= delta
+	if _occlusion_clock > 0.0:
+		return
+	_occlusion_clock = OCCLUSION_INTERVAL
+	for voice in _pool_3d:
+		if voice.playing:
+			_update_occlusion(voice)
+
+## Only world geometry occludes; players and cosmetic bodies do not.
+func is_occluded(world: Node3D, listener: Vector3, source: Vector3) -> bool:
+	if not is_instance_valid(world) or not world.is_inside_tree() or listener.distance_squared_to(source) < 0.04:
+		return false
+	var direction := listener.direction_to(source)
+	var ray := PhysicsRayQueryParameters3D.create(listener + direction * 0.04, source - direction * 0.04, 1)
+	return not world.get_world_3d().direct_space_state.intersect_ray(ray).is_empty()
+
+func _update_occlusion(voice: AudioStreamPlayer3D) -> void:
+	var camera := get_viewport().get_camera_3d()
+	var blocked := camera != null and is_occluded(camera, camera.global_position, voice.global_position)
+	voice.bus = OCCLUDED_BUS if blocked else &"Master"
+	voice.volume_db = float(voice.get_meta("base_db", VOLUME_DB)) + (OCCLUSION_LOSS_DB if blocked else 0.0)
+	voice.set_meta("occluded", blocked)
+
+func footstep_surface(actor: Node3D) -> StringName:
+	if not is_instance_valid(actor) or not actor.is_inside_tree():
+		return &"concrete"
+	var ray := PhysicsRayQueryParameters3D.create(actor.global_position + Vector3.UP * 0.3, actor.global_position - Vector3.UP * 0.8, 1)
+	var hit := actor.get_world_3d().direct_space_state.intersect_ray(ray)
+	if hit.is_empty():
+		return &"concrete"
+	match Effects.surface(hit.collider):
+		"metal": return &"metal"
+		"earth", "dirt", "ground", "grass", "sand": return &"earth"
+	return &"concrete"
+
+func play_footstep(actor: Node3D, landing: bool = false) -> void:
+	if not is_instance_valid(actor) or not actor.is_inside_tree():
+		return
+	var kind := footstep_surface(actor)
+	play_3d(StringName("step_" + kind), actor.global_position + Vector3.UP * 0.15,
+		0.75 if landing else _rng.randf_range(0.9, 1.1), 0.0 if landing else -4.0, 32.0 if landing else 25.0)
 
 ## Выстрел конкретного ствола: записанный сэмпл, если он есть.
 func play_shot(weapon_id: StringName, position: Vector3, pitch: float = 1.0) -> void:
@@ -76,6 +156,10 @@ func _spawn_3d(stream: AudioStream, position: Vector3, pitch: float, db_offset: 
 	p.volume_db = VOLUME_DB + db_offset
 	p.max_distance = max_distance
 	p.global_position = position
+	p.set_meta("base_db", VOLUME_DB + db_offset)
+	var scene := get_tree().current_scene
+	p.set_meta("scene_id", scene.get_instance_id() if is_instance_valid(scene) else 0)
+	_update_occlusion(p)
 	p.play()
 
 ## Свободный слот, иначе самый старый по кругу: обрыв далёкого звука слышно
@@ -115,6 +199,33 @@ func _shots_for(weapon_id: StringName) -> Array:
 	return list
 
 # --- синтез ------------------------------------------------------------------
+
+func _gen_step_metal(t: float) -> float:
+	return _noise() * exp(-t * 55.0) * 0.28 + (sin(TAU * 430.0 * t) + sin(TAU * 870.0 * t) * 0.35) * exp(-t * 25.0) * 0.16
+
+func _gen_step_earth(t: float) -> float:
+	return _noise() * exp(-t * 25.0) * (0.25 + 0.1 * sin(TAU * 80.0 * t))
+
+func _gen_kill(t: float) -> float:
+	return (sin(TAU * 1000.0 * t) + 0.6 * sin(TAU * 1500.0 * t)) * exp(-t * 14.0) * 0.25
+
+func _gen_melee(t: float) -> float:
+	return _noise() * sin(PI * minf(t / 0.22, 1.0)) * exp(-t * 7.0) * 0.5
+
+func _gen_grenade(t: float) -> float:
+	return _noise() * exp(-t * 40.0) * 0.3 + sin(TAU * 2200.0 * t) * exp(-t * 70.0) * 0.15
+
+func _gen_explosion(t: float) -> float:
+	return _noise() * exp(-t * 7.0) * 0.8 + sin(TAU * 55.0 * t) * exp(-t * 5.0) * 0.4
+
+func _gen_metal(t: float) -> float:
+	return _noise() * exp(-t * 110.0) * 0.5 + (sin(TAU * 1850.0 * t) + sin(TAU * 2910.0 * t) * 0.4) * exp(-t * 26.0) * 0.35
+
+func _gen_stone(t: float) -> float:
+	return _noise() * exp(-t * 42.0) * 0.7 + sin(TAU * 160.0 * t) * exp(-t * 65.0) * 0.3
+
+func _gen_casing(t: float) -> float:
+	return (sin(TAU * 3100.0 * t) + sin(TAU * 4300.0 * t) * 0.35) * exp(-t * 42.0) * 0.3
 
 func _gen_shot(t: float) -> float:
 	var env := exp(-t * 19.0)

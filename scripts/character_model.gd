@@ -27,8 +27,35 @@ static func build(skin_name: String, height: float) -> Node3D:
 
 	_scale_to_height(model, height)
 	_apply_skin(model, skin_name)
+	model.set_meta("skin_name", skin_name)
 	_attach_animations(model)
+	for node in _walk(model):
+		if node is Skeleton3D:
+			var motion := preload("res://scripts/character_motion.gd").new()
+			motion.name = "CombatMotion"
+			node.add_child(motion)
+			model.set_meta("combat_motion", motion)
+			break
 	return model
+
+static func motion(model: Node3D):
+	return model.get_meta("combat_motion", null) if is_instance_valid(model) else null
+
+static func drive(model: Node3D, actor: Node3D, state: Dictionary) -> void:
+	var controller = motion(model)
+	if controller == null:
+		return
+	controller.actor = actor
+	controller.local_velocity = actor.global_basis.inverse() * state.get("velocity", Vector3.ZERO)
+	controller.pitch = clampf(state.get("pitch", 0.0), -1.2, 1.2)
+	controller.aiming = state.get("aiming", false)
+	controller.crouching = state.get("crouching", false)
+	controller.airborne = state.get("airborne", false)
+	controller.alive = state.get("alive", true)
+	controller.reload_progress = state.get("reload", -1.0)
+	var tree := model.get_node_or_null("AnimationTree")
+	if tree != null:
+		tree.backward = controller.local_velocity.z > 0.3
 
 static func _scale_to_height(model: Node3D, height: float) -> void:
 	var box := _aabb(model)
@@ -79,6 +106,55 @@ static func _attach_animations(model: Node3D) -> void:
 		source.free()
 
 	player.add_animation_library("", library)
+	player.playback_default_blend_time = 0.16
+	_attach_animation_tree(model, player)
+
+static func _attach_animation_tree(model: Node3D, player: AnimationPlayer) -> void:
+	if not player.has_animation("idle") or not player.has_animation("run") or not player.has_animation("jump"):
+		return
+	var tree := preload("res://scripts/character_animation_tree.gd").new()
+	tree.name = "AnimationTree"
+	tree.anim_player = NodePath("../AnimationPlayer")
+	var blend := AnimationNodeBlendTree.new()
+	for key in ANIMATIONS:
+		var clip := AnimationNodeAnimation.new()
+		clip.animation = key
+		blend.add_node(key, clip)
+	blend.add_node("Stride", AnimationNodeTimeScale.new())
+	blend.add_node("Ground", AnimationNodeBlend2.new())
+	blend.add_node("JumpStart", AnimationNodeTimeSeek.new())
+	blend.add_node("Air", AnimationNodeBlend2.new())
+	blend.connect_node("Stride", 0, "run")
+	blend.connect_node("Ground", 0, "idle")
+	blend.connect_node("Ground", 1, "Stride")
+	blend.connect_node("JumpStart", 0, "jump")
+	blend.connect_node("Air", 0, "Ground")
+	blend.connect_node("Air", 1, "JumpStart")
+	blend.connect_node("output", 0, "Air")
+	tree.tree_root = blend
+	model.add_child(tree)
+
+## Одинаковые переходы для ботов и сетевых бойцов. Прыжок не зацикливаем.
+static func animate(player: AnimationPlayer, velocity: Vector3, airborne: bool, alive: bool) -> void:
+	if player == null:
+		return
+	var tree := player.get_parent().get_node_or_null("AnimationTree")
+	if tree != null:
+		tree.set_locomotion(velocity, airborne, alive)
+		return
+	if not alive:
+		player.pause()
+		return
+	var speed := Vector2(velocity.x, velocity.z).length()
+	var wanted := "jump" if airborne else ("run" if speed > 0.6 else "idle")
+	if not player.has_animation(wanted):
+		return
+	player.speed_scale = clampf(speed / 4.2, 0.55, 1.7) if wanted == "run" else 1.0
+	if player.get_meta("locomotion", "") != wanted:
+		player.set_meta("locomotion", wanted)
+		player.play(wanted, 0.16)
+	elif not player.is_playing() and wanted != "jump":
+		player.play(wanted, 0.16)
 
 ## Габариты в координатах корня модели. Считаются по локальным трансформам:
 ## модель ещё не в дереве, поэтому global_transform здесь недоступен.

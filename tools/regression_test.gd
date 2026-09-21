@@ -11,6 +11,7 @@ var failures: int = 0
 func _ready() -> void:
 	main = load("res://scenes/main.tscn").instantiate()
 	main.online = false
+	main.match_flow_enabled = false
 	add_child(main)
 	# Карта, игрок и боты появляются за первый кадр, а вот физика — нет: спавн
 	# стоит в 0.2 м над дорогой, и на падение уходит около 13 физкадров.
@@ -68,6 +69,14 @@ func _run() -> void:
 	# (клетка 6.5 м), поэтому стена между ними появиться не может.
 	var victim: Bot = _bots()[1]
 	var shooter: PlayerCharacter = main.player
+	shooter.set_physics_process(false)
+	victim.set_physics_process(false)
+	shooter.global_position = Vector3(0.0, 100.0, 0.0)
+	victim.global_position = Vector3(0.0, 100.0, -2.5)
+	shooter.look_yaw = 0.0
+	shooter.look_pitch = 0.0
+	shooter.rotation = Vector3.ZERO
+	shooter.head.rotation = Vector3.ZERO
 	victim.global_position = shooter.global_position - shooter.global_transform.basis.z * 2.5
 	victim.state = Bot.State.IDLE
 	await get_tree().physics_frame
