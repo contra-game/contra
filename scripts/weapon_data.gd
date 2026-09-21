@@ -3,7 +3,7 @@
 class_name WeaponData
 extends Resource
 
-enum Slot { PRIMARY, SECONDARY }
+enum Slot { PRIMARY, SECONDARY, MELEE, GRENADE }
 enum FireMode { AUTO, SEMI, BOLT }
 
 @export var id: StringName = &""
@@ -30,6 +30,9 @@ enum FireMode { AUTO, SEMI, BOLT }
 @export var reserve_ammo: int = 90
 @export var reload_time: float = 2.4
 @export var equip_time: float = 0.45
+## Дробовик заряжается по одному патрону; остальные — целым магазином.
+@export var reload_per_shell: bool = false
+@export var shell_reload_time: float = 0.55
 
 @export_group("Разброс, градусы")
 @export var spread_base: float = 0.4
@@ -40,6 +43,7 @@ enum FireMode { AUTO, SEMI, BOLT }
 @export var spread_per_shot: float = 0.35
 @export var spread_max: float = 7.0
 @export var spread_recovery: float = 7.0
+@export var spread_recovery_delay: float = 0.16
 
 @export_group("Отдача, градусы за выстрел")
 @export var recoil_up: float = 1.1
@@ -76,5 +80,18 @@ func damage_at(distance: float) -> float:
 ## Развернуть модель на 180°, если дуло смотрит назад.
 @export var model_flip: bool = false
 
+@export_group("Маркеры оружия")
+## Позиции в метрах относительно подогнанной модели в нейтральной позе.
+## После создания Marker3D привязаны к Control и следуют за анимацией.
+@export var muzzle_offset := Vector3(0.0, 0.026, -0.62)
+@export var sight_offset := Vector3(0.0, 0.055, 0.02)
+@export var sight_rotation := Vector3(0.19, 0.0, 0.0)
+@export var ejection_offset := Vector3(0.045, 0.05, -0.08)
+@export var ads_eye_distance: float = 0.32
+@export var ads_speed: float = 14.0
+
 ## Цена в магазине. 0 — ствол не продаётся.
 @export var price: int = 0
+
+func is_firearm() -> bool:
+	return slot == Slot.PRIMARY or slot == Slot.SECONDARY
