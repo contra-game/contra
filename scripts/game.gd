@@ -4,16 +4,22 @@
 extends Node3D
 
 signal score_changed(kills: int, deaths: int)
-signal killfeed(text: String)
+## Тип события задаёт та сторона, которая его знает: разбирать готовую строку
+## по подстроке «Вы убили» на стороне HUD было бы хрупко.
+signal killfeed(text: String, kind: int)
+
+enum Feed { NEUTRAL, MINE, DEATH }
 
 const PLAYER_SCENE := preload("res://scenes/player.tscn")
 const BOT_SCENE := preload("res://scenes/bot.tscn")
+const SpawnPicker := preload("res://scripts/spawn_picker.gd")
 
 @export var bot_count: int = 8
 @export var online: bool = true
 @export var respawn_delay: float = 3.0
 @export var bot_respawn_delay: float = 5.0
 @export var match_seed: int = 20260920
+@export var match_flow_enabled: bool = true
 
 @onready var map: CityMap = $Map
 @onready var actors: Node3D = $Actors
@@ -25,6 +31,9 @@ var player: PlayerCharacter
 var net: Node
 var kills: int = 0
 var deaths: int = 0
+var match_flow: Node
+var _match_label: Label
+var _round_frags: Dictionary = {}
 
 var _rng := RandomNumberGenerator.new()
 
@@ -41,6 +50,17 @@ func _ready() -> void:
 		"сеть" if online else "офлайн", match_seed, 0 if online else bot_count])
 	_rng.seed = match_seed
 	map.build(match_seed)
+	Effects.prewarm(self)
+	var inventory := preload("res://scripts/world_inventory.gd").new()
+	inventory.name = "WorldInventory"
+	add_child(inventory)
+	if match_flow_enabled:
+		match_flow = preload("res://scripts/match_flow.gd").new()
+		match_flow.name = "MatchFlow"
+		add_child(match_flow)
+		match_flow.phase_changed.connect(_on_match_phase)
+		match_flow.configure(online, match_seed, _match_scores)
+		_build_match_label()
 	_spawn_pickups()
 
 	if online:
@@ -53,6 +73,69 @@ func _ready() -> void:
 
 	_spawn_player()
 	_spawn_bots(bot_count)
+
+func _process(_delta: float) -> void:
+	if match_flow != null and _match_label != null:
+		_match_label.text = match_flow.label()
+
+func _build_match_label() -> void:
+	_match_label = Label.new()
+	_match_label.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+	_match_label.position = Vector2(-400, 24)
+	_match_label.size = Vector2(800, 35)
+	_match_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_match_label.add_theme_font_size_override("font_size", 19)
+	_match_label.add_theme_color_override("font_color", Hud.ACCENT)
+	_match_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud.add_child(_match_label)
+
+func _on_match_phase(phase: int, _round: int) -> void:
+	if phase == match_flow.Phase.ACTIVE or phase == match_flow.Phase.WARMUP:
+		kills = 0
+		deaths = 0
+		_round_frags.clear()
+		if is_instance_valid(player):
+			if online:
+				player.get_parent().frags = 0
+				player.get_parent().deaths = 0
+				player.get_parent().score_round = int(match_flow.snapshot.revision)
+			player.respawn(_network_spawn(false))
+			player.economy.reset()
+		for bot in actors.get_children():
+			if bot is Bot:
+				bot.respawn(_safe_spawn(map.bot_spawns, bot))
+		score_changed.emit(kills, deaths)
+	if is_instance_valid(player):
+		player.input_enabled = match_flow.allows_combat()
+	for bot in actors.get_children():
+		if bot is Bot:
+			if not match_flow.allows_combat():
+				bot.velocity = Vector3.ZERO
+				CharacterModel.animate(bot._model_anim, Vector3.ZERO, false, bot.health.alive)
+			bot.set_physics_process(match_flow.allows_combat())
+
+func _scoring() -> bool:
+	return match_flow == null or match_flow.scores_enabled()
+
+func _match_scores() -> Dictionary:
+	var rows: Dictionary = {}
+	for actor in get_tree().get_nodes_in_group("combatants"):
+		if not is_instance_valid(actor):
+			continue
+		var id := str(actor.get_instance_id())
+		var frags := int(_round_frags.get(id, 0))
+		if online and actor is PlayerCharacter:
+			id = str(actor.peer_id)
+			frags = int(actor.get_parent().get("frags"))
+			if match_flow != null and int(actor.get_parent().score_round) != int(match_flow.snapshot.get("revision", 0)):
+				frags = 0
+		rows[id] = {"name": _name_of(actor), "frags": frags}
+	return rows
+
+func _record_frag(attacker: Node) -> void:
+	if is_instance_valid(attacker):
+		var id := str(attacker.get_instance_id())
+		_round_frags[id] = int(_round_frags.get(id, 0)) + 1
 
 ## Сеть уже поднята сессией — матч только подписывается на её события.
 func _bind_network() -> void:
@@ -68,7 +151,7 @@ func _bind_network() -> void:
 		net.death_announced.connect(_on_death_announced)
 
 func _on_session_state(text: String) -> void:
-	killfeed.emit(text)
+	killfeed.emit(text, Feed.NEUTRAL)
 
 ## Чужой боец приезжает от Photon — сообщаем, что в бою есть кто-то живой.
 func _on_remote_player_spawned(node: Node) -> void:
@@ -77,13 +160,16 @@ func _on_remote_player_spawned(node: Node) -> void:
 		return
 	other.add_to_group("combatants")
 	print("[матч] в бою появился %s" % other.display_name)
-	killfeed.emit("%s в бою" % other.display_name)
+	killfeed.emit("%s в бою" % other.display_name, Feed.NEUTRAL)
 
 func _on_local_player_spawned(node: Node) -> void:
 	player = node.get_node("Player") as PlayerCharacter
 	player.respawn(_network_spawn(true))
 	player.died.connect(_on_player_died)
 	player.weapons.hit_confirmed.connect(_on_player_hit)
+	player.input_enabled = match_flow == null or match_flow.allows_combat()
+	if match_flow != null:
+		player.get_parent().score_round = int(match_flow.snapshot.get("revision", 0))
 	hud.bind(self, player)
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
@@ -95,7 +181,7 @@ func _spawn_player() -> void:
 	player.team = 0
 	player.add_to_group("combatants")
 	actors.add_child(player)
-	player.global_transform = _pick(map.player_spawns)
+	player.global_transform = _safe_spawn(map.player_spawns, player)
 	player.died.connect(_on_player_died)
 	player.weapons.hit_confirmed.connect(_on_player_hit)
 	hud.bind(self, player)
@@ -110,15 +196,8 @@ func _spawn_bots(count: int) -> void:
 		bot.add_to_group("combatants")
 		actors.add_child(bot)
 		# На старте боты расходятся по всем точкам карты, а не жмутся в один угол.
-		bot.global_transform = _spread_spawn(i)
+		bot.global_transform = _safe_spawn(map.bot_spawns, bot, i)
 		bot.died.connect(_on_bot_died.bind(bot))
-
-func _spread_spawn(index: int) -> Transform3D:
-	if map.bot_spawns.is_empty():
-		return Transform3D.IDENTITY
-	var point: Transform3D = map.bot_spawns[index % map.bot_spawns.size()]
-	point.origin += Vector3(_rng.randf_range(-2.0, 2.0), 0.0, _rng.randf_range(-2.0, 2.0))
-	return point
 
 func _spawn_pickups() -> void:
 	var ids := Weapons.ids()
@@ -133,84 +212,54 @@ func _spawn_pickups() -> void:
 	if online:
 		Session.net.register_pickups(pickups)
 
-## Респавн: не в упор к игроку, но и не обязательно в дальнем углу —
-## иначе бой каждый раз начинается с долгой пробежки.
-const SAFE_RESPAWN_DISTANCE := 25.0
-
-func _spawn_away_from_player(points: Array[Transform3D]) -> Transform3D:
-	if points.is_empty():
-		return Transform3D.IDENTITY
-	if player == null:
-		return _pick(points)
-	var best := points[0]
-	var best_distance := -1.0
-	for i in 6:
-		var candidate: Transform3D = points[_rng.randi() % points.size()]
-		var distance := candidate.origin.distance_to(player.global_position)
-		if distance >= SAFE_RESPAWN_DISTANCE:
-			best = candidate
-			break
-		if distance > best_distance:
-			best_distance = distance
-			best = candidate
-	# Небольшой разброс, чтобы боты не появлялись строго в одной точке.
-	best.origin += Vector3(_rng.randf_range(-2.0, 2.0), 0.0, _rng.randf_range(-2.0, 2.0))
-	return best
-
-func _pick(points: Array[Transform3D]) -> Transform3D:
-	if points.is_empty():
-		return Transform3D.IDENTITY
-	return points[_rng.randi() % points.size()]
+## Prefer distance and world cover, checking the full standing capsule.
+func _safe_spawn(points: Array[Transform3D], actor: Node3D, preferred: int = 0) -> Transform3D:
+	var ordered: Array[Transform3D] = []
+	for i in points.size():
+		ordered.append(points[(i + preferred) % points.size()])
+	var result := SpawnPicker.choose(self, ordered, actor, online)
+	return result.transform if not result.is_empty() else actor.global_transform
 
 # --- смерти и счёт -----------------------------------------------------------
 
 func _on_player_died(attacker: Node) -> void:
-	deaths += 1
-	if online:
-		player.get_parent().deaths = deaths
-	player.economy.award_death()
+	if _scoring():
+		deaths += 1
+		if online:
+			player.get_parent().deaths = deaths
+		elif attacker != player:
+			_record_frag(attacker)
+		player.economy.award_death()
 	score_changed.emit(kills, deaths)
-	killfeed.emit("%s убил вас" % _name_of(attacker))
+	killfeed.emit("%s убил вас" % _name_of(attacker), Feed.DEATH)
 	get_tree().create_timer(respawn_delay).timeout.connect(_respawn_player)
 
 func _respawn_player() -> void:
 	if player == null or not is_instance_valid(player):
 		return
-	player.respawn(_network_spawn(false) if online else _pick(map.player_spawns))
+	if player.health.alive or (match_flow != null and not match_flow.allows_combat()):
+		return
+	var at := _network_spawn(false)
+	if not SpawnPicker.clear(get_world_3d().direct_space_state, at, player):
+		get_tree().create_timer(0.5).timeout.connect(_respawn_player)
+		return
+	player.respawn(at)
 
 func _network_spawn(initial: bool) -> Transform3D:
 	var points: Array[Transform3D] = map.player_spawns.duplicate()
 	points.append_array(map.bot_spawns)
-	if points.is_empty():
-		return Transform3D.IDENTITY
-	if initial:
-		var preferred: Transform3D = points[(maxi(player.peer_id, 1) - 1) % points.size()]
-		var occupied := false
-		for other in get_tree().get_nodes_in_group("combatants"):
-			if other != player and not other.is_dead() and other.global_position.distance_to(preferred.origin) < 4.0:
-				occupied = true
-		if not occupied:
-			return preferred
-	var best := points[0]
-	var best_distance := -1.0
-	for point in points:
-		var nearest := INF
-		for other in get_tree().get_nodes_in_group("combatants"):
-			if other != player and not other.is_dead():
-				nearest = minf(nearest, point.origin.distance_to(other.global_position))
-		if nearest > best_distance:
-			best_distance = nearest
-			best = point
-	return best
+	return _safe_spawn(points, player, maxi(player.peer_id - 1, 0) if initial else 0)
 
 func _on_network_kill(victim_name: String, _headshot: bool) -> void:
 	# Подтверждение может прийти раньше, чем Photon отдал нам своего бойца.
 	if player == null or not is_instance_valid(player):
 		return
+	if not _scoring():
+		return
 	kills += 1
 	player.get_parent().frags = kills
 	score_changed.emit(kills, deaths)
-	killfeed.emit("Вы убили %s" % victim_name)
+	killfeed.emit("Вы убили %s" % victim_name, Feed.MINE)
 
 ## Своё убийство уже показал kill_confirmed, поэтому строки от своего имени
 ## пропускаем. Тёзки в одной комнате потеряют одну строку — терпимо, имена в
@@ -218,18 +267,27 @@ func _on_network_kill(victim_name: String, _headshot: bool) -> void:
 func _on_death_announced(victim_name: String, killer_name: String, headshot: bool) -> void:
 	if player != null and is_instance_valid(player) and killer_name == player.display_name:
 		return
-	killfeed.emit("%s убил %s%s" % [killer_name, victim_name, " в голову" if headshot else ""])
+	killfeed.emit("%s убил %s%s" % [killer_name, victim_name, " в голову" if headshot else ""], Feed.NEUTRAL)
 
 func _on_bot_died(attacker: Node, bot: Bot) -> void:
-	if attacker == player:
+	if _scoring() and attacker != bot:
+		_record_frag(attacker)
+	if attacker == player and _scoring():
 		kills += 1
 		score_changed.emit(kills, deaths)
-		killfeed.emit("Вы убили %s" % bot.display_name)
+		killfeed.emit("Вы убили %s" % bot.display_name, Feed.MINE)
 	else:
-		killfeed.emit("%s убил %s" % [_name_of(attacker), bot.display_name])
-	get_tree().create_timer(bot_respawn_delay).timeout.connect(func() -> void:
-		if is_instance_valid(bot):
-			bot.respawn(_spawn_away_from_player(map.bot_spawns)))
+		killfeed.emit("%s убил %s" % [_name_of(attacker), bot.display_name], Feed.NEUTRAL)
+	get_tree().create_timer(bot_respawn_delay).timeout.connect(_respawn_bot.bind(bot))
+
+func _respawn_bot(bot: Bot) -> void:
+	if not is_instance_valid(bot) or bot.health.alive or (match_flow != null and not match_flow.allows_combat()):
+		return
+	var at := _safe_spawn(map.bot_spawns, bot)
+	if not SpawnPicker.clear(get_world_3d().direct_space_state, at, bot):
+		get_tree().create_timer(0.5).timeout.connect(_respawn_bot.bind(bot))
+		return
+	bot.respawn(at)
 
 func _name_of(node: Node) -> String:
 	if node == null or not is_instance_valid(node):
@@ -242,5 +300,5 @@ func _name_of(node: Node) -> String:
 ## Деньги начисляются за фактическое убийство, а не за факт смерти цели:
 ## так добивание чужой цели не оплачивается.
 func _on_player_hit(headshot: bool, killed: bool) -> void:
-	if killed and player != null:
+	if killed and player != null and _scoring():
 		player.economy.award_kill(headshot)
