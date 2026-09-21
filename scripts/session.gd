@@ -26,6 +26,12 @@ var player_name: String = "Игрок"
 var room_name: String = "contra-city"
 var online: bool = false
 var match_seed: int = 0
+## Множитель к базовой чувствительности мыши: игроку понятно «1.0×», а не
+## радианы на пиксель из player.gd.
+var mouse_sensitivity: float = 1.0
+
+const SENSITIVITY_MIN := 0.2
+const SENSITIVITY_MAX := 4.0
 
 const NET_MANAGER_SCRIPT := "res://scripts/net_manager.gd"
 
@@ -169,6 +175,7 @@ func save_settings() -> void:
 	var config := ConfigFile.new()
 	config.set_value("player", "name", player_name)
 	config.set_value("player", "room", room_name)
+	config.set_value("mouse", "sensitivity", mouse_sensitivity)
 	config.save(SETTINGS_PATH)
 
 func load_settings() -> void:
@@ -177,6 +184,16 @@ func load_settings() -> void:
 		return
 	player_name = _sanitize(str(config.get_value("player", "name", player_name)), 20, "Игрок")
 	room_name = _sanitize(str(config.get_value("player", "room", room_name)), 24, "contra-city")
+	mouse_sensitivity = set_mouse_sensitivity(config.get_value("mouse", "sensitivity", mouse_sensitivity))
+
+## Ноль в файле означал бы намертво мёртвую мышь, а nan — необратимо сломанный
+## поворот: значение зажимается в рабочий диапазон при каждом присвоении.
+func set_mouse_sensitivity(value: Variant) -> float:
+	var number := float(value) if value is float or value is int else 1.0
+	if not is_finite(number):
+		number = 1.0
+	mouse_sensitivity = clampf(number, SENSITIVITY_MIN, SENSITIVITY_MAX)
+	return mouse_sensitivity
 
 ## Файл настроек лежит у пользователя и правится руками — доверять ему нельзя.
 func _sanitize(value: String, limit: int, fallback: String) -> String:
