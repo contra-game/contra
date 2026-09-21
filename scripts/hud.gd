@@ -28,6 +28,13 @@ var _respawn_left: float = 0.0
 var _scoreboard: PanelContainer
 var _score_rows: Label
 var _score_refresh: float = 0.0
+var _interaction_label: Label
+var _reload_bar: ProgressBar
+var _damage_indicator: Control
+var _slots_label: Label
+var _sensitivity_label: Label
+var _ping_label: Label
+var _ping_refresh: float = 0.0
 
 func _ready() -> void:
 	layer = 10
@@ -40,11 +47,17 @@ func _ready() -> void:
 	_build_shop()
 	_scope = ScopeOverlay.new()
 	add_child(_scope)
+	_damage_indicator = Control.new()
+	_damage_indicator.set_script(preload("res://scripts/damage_indicator.gd"))
+	_damage_indicator.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_damage_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_damage_indicator)
 	_build_scoreboard()
 
 func bind(game_node: Node, player_node: PlayerCharacter) -> void:
 	game = game_node
 	player = player_node
+	_damage_indicator.camera = player.camera
 
 	player.health.changed.connect(_on_health_changed)
 	player.died.connect(_on_player_died)
@@ -69,6 +82,7 @@ func bind(game_node: Node, player_node: PlayerCharacter) -> void:
 	_on_ammo_changed(slot.mag, slot.reserve)
 
 func _process(delta: float) -> void:
+	_update_ping(delta)
 	_scoreboard.visible = Input.is_action_pressed("scoreboard") and not _paused
 	_score_refresh -= delta
 	if _scoreboard.visible and _score_refresh <= 0.0:
@@ -79,9 +93,67 @@ func _process(delta: float) -> void:
 		_center_label.text = "Вы убиты\nВозрождение через %.1f" % _respawn_left
 	_damage_flash.modulate.a = lerpf(_damage_flash.modulate.a, 0.0, delta * 3.5)
 	if player != null and player.weapons != null:
+		_update_slots()
 		_crosshair.set_fov(player.camera.fov)
-		_hint_label.visible = player.weapons.reloading
-		_hint_label.text = "ПЕРЕЗАРЯДКА"
+		_crosshair.set_reticle_alpha(1.0 - smoothstep(0.35, 0.9, player.weapons.ads_blend))
+		var combat_ui := player.health.alive and not _paused and not player.shop_open
+		_hint_label.visible = combat_ui and player.weapons.reloading
+		_hint_label.text = "ПЕРЕЗАРЯДКА · %.1f с" % player.weapons._reload_left
+		var data := player.weapons.current_data()
+		if player.weapons.reloading and data != null and data.reload_per_shell:
+			_hint_label.text = "ЗАРЯДКА · ЛКМ — прервать"
+		elif combat_ui and not player.weapons.reloading:
+			var slot := player.weapons.current()
+			if not slot.is_empty() and slot.mag <= 0:
+				_hint_label.visible = true
+				_hint_label.text = "[R] Перезарядить" if slot.reserve > 0 else "Нет патронов · [1–4] Сменить оружие"
+		_reload_bar.visible = combat_ui and player.weapons.reloading
+		_reload_bar.value = player.weapons.reload_progress()
+		_interaction_label.text = player.interaction_hint
+		_interaction_label.visible = combat_ui and not player.interaction_hint.is_empty()
+		_damage_indicator.visible = combat_ui
+
+## Цвет важнее цифры: зелёный — играбельно, красный — стрелять с упреждением.
+func _update_ping(delta: float) -> void:
+	if not Session.online:
+		_ping_label.visible = false
+		return
+	_ping_refresh -= delta
+	if _ping_refresh > 0.0:
+		return
+	_ping_refresh = 0.5
+	var ping := int(NetApi.rtt() * 1000.0)
+	_ping_label.visible = true
+	_ping_label.text = "%d мс" % ping
+	var color := Color(0.5, 0.85, 0.5)
+	if ping > 120:
+		color = DANGER
+	elif ping > 60:
+		color = ACCENT
+	_ping_label.add_theme_color_override("font_color", color)
+
+func _on_sensitivity_changed(value: float) -> void:
+	Session.set_mouse_sensitivity(value)
+	_sensitivity_label.text = "Чувствительность мыши — %.2f×" % Session.mouse_sensitivity
+
+func _update_slots() -> void:
+	if _slots_label == null:
+		_slots_label = _make_label("", 16, Color(0.8, 0.83, 0.86))
+		_slots_label.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+		_slots_label.position = Vector2(-450, -175)
+		_slots_label.custom_minimum_size.x = 415
+		_slots_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		_slots_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		add_child(_slots_label)
+	var lines: Array[String] = []
+	for index in player.weapons.SLOT_COUNT:
+		var slot = player.weapons.slots[index]
+		var label: String = slot.data.display_name if slot != null else "—"
+		lines.append("%s%d %s" % ["› " if index == player.weapons.current_slot else "", index + 1, label])
+	_slots_label.text = "   ".join(lines.slice(0, 2)) + "\n" + "   ".join(lines.slice(2)) + "\n[G] Выбросить · [E] Подобрать"
+	_slots_label.visible = player.health.alive and not _paused and not player.shop_open
+	if player.weapons.current_data() != null and player.weapons.current_data().slot == WeaponData.Slot.MELEE:
+		_ammo_label.text = "БЛИЖНИЙ БОЙ"
 
 func _build_scoreboard() -> void:
 	_scoreboard = PanelContainer.new()
@@ -163,11 +235,44 @@ func _build_status() -> void:
 	_score_label.position = Vector2(34, 26)
 	add_child(_score_label)
 
+	# Пинг на виду, а не только по Tab: «лагает или я мажу» решается взглядом.
+	_ping_label = _make_label("", 16, Color(0.5, 0.85, 0.5))
+	_ping_label.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	_ping_label.position = Vector2(34, 54)
+	_ping_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ping_label.visible = false
+	add_child(_ping_label)
+
 	_hint_label = _make_label("ПЕРЕЗАРЯДКА", 22, ACCENT)
 	_hint_label.set_anchors_preset(Control.PRESET_CENTER)
-	_hint_label.position = Vector2(-80, 70)
+	_hint_label.position = Vector2(-260, 70)
+	_hint_label.custom_minimum_size.x = 520
+	_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_hint_label.visible = false
 	add_child(_hint_label)
+	_reload_bar = ProgressBar.new()
+	_reload_bar.set_anchors_preset(Control.PRESET_CENTER)
+	_reload_bar.position = Vector2(-90, 103)
+	_reload_bar.size = Vector2(180, 5)
+	_reload_bar.max_value = 1.0
+	_reload_bar.show_percentage = false
+	var track := StyleBoxFlat.new()
+	track.bg_color = Color(0.08, 0.1, 0.13, 0.8)
+	var fill := StyleBoxFlat.new()
+	fill.bg_color = ACCENT
+	_reload_bar.add_theme_stylebox_override("background", track)
+	_reload_bar.add_theme_stylebox_override("fill", fill)
+	_reload_bar.size = Vector2(180, 5)
+	_reload_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_reload_bar.visible = false
+	add_child(_reload_bar)
+	_interaction_label = _make_label("", 22, ACCENT)
+	_interaction_label.set_anchors_preset(Control.PRESET_CENTER)
+	_interaction_label.position = Vector2(-300, 130)
+	_interaction_label.custom_minimum_size.x = 600
+	_interaction_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_interaction_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_interaction_label)
 
 func _build_killfeed() -> void:
 	_killfeed = VBoxContainer.new()
@@ -189,7 +294,7 @@ func _build_pause() -> void:
 	_pause_panel = PanelContainer.new()
 	_pause_panel.set_anchors_preset(Control.PRESET_CENTER)
 	_pause_panel.position = Vector2(-170, -120)
-	_pause_panel.custom_minimum_size = Vector2(340, 240)
+	_pause_panel.custom_minimum_size = Vector2(340, 300)
 	_pause_panel.visible = false
 	add_child(_pause_panel)
 
@@ -208,6 +313,24 @@ func _build_pause() -> void:
 		15, Color(0.78, 0.8, 0.84))
 	help.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(help)
+
+	_sensitivity_label = _make_label("", 15, Color(0.78, 0.8, 0.84))
+	_sensitivity_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(_sensitivity_label)
+	var sensitivity := HSlider.new()
+	sensitivity.min_value = Session.SENSITIVITY_MIN
+	sensitivity.max_value = Session.SENSITIVITY_MAX
+	sensitivity.step = 0.05
+	sensitivity.value = Session.mouse_sensitivity
+	sensitivity.custom_minimum_size.x = 300
+	# Игрок видит результат, пока тянет; в файл значение уходит по отпусканию
+	# ручки и при закрытии паузы — запись на каждый пиксель движения не нужна.
+	sensitivity.value_changed.connect(_on_sensitivity_changed)
+	sensitivity.drag_ended.connect(func(changed: bool) -> void:
+		if changed:
+			Session.save_settings())
+	box.add_child(sensitivity)
+	_on_sensitivity_changed(Session.mouse_sensitivity)
 
 	var resume := Button.new()
 	resume.text = "Продолжить"
@@ -257,8 +380,10 @@ func _on_score_changed(kills: int, deaths: int) -> void:
 func _on_hit_confirmed(headshot: bool, killed: bool) -> void:
 	_crosshair.show_hitmarker(headshot, killed)
 
-func _on_damaged(_amount: float, _attacker: Node, _headshot: bool) -> void:
+func _on_damaged(_amount: float, attacker: Node, _headshot: bool) -> void:
 	_damage_flash.modulate.a = 1.0
+	if is_instance_valid(attacker) and attacker is Node3D:
+		_damage_indicator.show_damage(attacker.global_position)
 
 func _on_player_died(_attacker: Node) -> void:
 	_shop.close()
@@ -269,29 +394,55 @@ func _on_player_respawned() -> void:
 	_respawn_left = 0.0
 	_center_label.text = ""
 	_crosshair.visible = true
+	_damage_indicator.time_left = 0.0
+	_damage_indicator.queue_redraw()
+	_damage_flash.modulate.a = 0.0
 
-func push_killfeed(text: String) -> void:
-	var label := _make_label(text, 16, Color(0.86, 0.88, 0.9))
+## Метка едет внутри обёртки, а не сама по себе: VBoxContainer переписывает
+## position своих детей каждый кадр, и анимация сдвига уехала бы в никуда.
+func push_killfeed(text: String, kind: int = 0) -> void:
+	var color := Color(0.86, 0.88, 0.9)
+	if kind == 1:
+		color = ACCENT
+	elif kind == 2:
+		color = DANGER
+	var label := _make_label(text, 16, color)
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_killfeed.add_child(label)
-	# Твин, который гасит метку, держит на неё ссылку; немедленный free()
+	label.size.x = 400
+	var row := Control.new()
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.clip_contents = true
+	row.add_child(label)
+	label.position.x = 60
+	label.modulate.a = 0.0
+	_killfeed.add_child(row)
+	# Высота меряется после входа в дерево: до этого тема ещё не применена.
+	row.custom_minimum_size = Vector2(400, label.get_minimum_size().y)
+	# Твин, который гасит строку, держит на неё ссылку; немедленный free()
 	# оставляет твин с освобождённой целью. Снимаем с дерева сразу, чтобы лишняя
-	# метка не участвовала в подсчёте до конца кадра.
+	# строка не участвовала в подсчёте до конца кадра.
 	while _killfeed.get_child_count() > 5:
 		var oldest := _killfeed.get_child(0)
 		_killfeed.remove_child(oldest)
 		oldest.queue_free()
 	var tween := create_tween()
+	tween.set_parallel(true)
+	tween.tween_property(label, "position:x", 0.0, 0.22).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tween.tween_property(label, "modulate:a", 1.0, 0.16)
+	tween.set_parallel(false)
 	tween.tween_interval(4.5)
 	tween.tween_property(label, "modulate:a", 0.0, 0.6)
 	tween.tween_callback(func() -> void:
-		if is_instance_valid(label):
-			label.queue_free())
+		if is_instance_valid(row):
+			row.queue_free())
 
 func toggle_pause() -> void:
 	_shop.close()
 	_paused = not _paused
 	_pause_panel.visible = _paused
+	# Ползунок двигают и клавишами — drag_ended тогда не приходит.
+	if not _paused:
+		Session.save_settings()
 	get_tree().paused = _paused and not Session.online
 	if player != null:
 		player.input_enabled = not _paused
@@ -334,9 +485,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	if digit >= 0 and digit <= 8 and _shop.handle_digit(digit):
 		get_viewport().set_input_as_handled()
 
-## В оптике обычный прицел не нужен — его заменяет перекрестие окуляра.
+## Обычный прицел затухает через reticle_alpha; хитмаркер остаётся и в оптике.
 func _on_scope_changed(active: bool) -> void:
 	_scope.visible = active
-	_crosshair.visible = not active and player != null and not player.is_dead()
+	_crosshair.visible = player != null and not player.is_dead()
 	if active:
 		_scope.queue_redraw()
