@@ -63,10 +63,12 @@ func _shoot(data: WeaponData, degrees: Vector3) -> Image:
 	_pivot.add_child(holder)
 	if data.model_path != "" and ResourceLoader.exists(data.model_path):
 		var model := (load(data.model_path) as PackedScene).instantiate() as Node3D
-		holder.add_child(model)
+		var fitted := Node3D.new()
+		holder.add_child(fitted)
+		fitted.add_child(model)
 		var probe: WeaponData = data.duplicate()
 		probe.model_rotation = Vector3(deg_to_rad(degrees.x), deg_to_rad(degrees.y), deg_to_rad(degrees.z))
-		ViewModel.fit(model, probe)
+		ViewModel.fit(fitted, model, probe)
 	holder.position = WeaponManager.HIP_POSITION
 	holder.rotation = Vector3(0.0, -0.07, 0.0)
 
