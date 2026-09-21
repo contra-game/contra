@@ -52,6 +52,10 @@ const CONTAINERS := ["shipping-container-a", "shipping-container-b", "shipping-c
 var player_spawns: Array[Transform3D] = []
 var bot_spawns: Array[Transform3D] = []
 var weapon_spawns: Array[Vector3] = []
+signal navigation_ready
+var navigation_region: NavigationRegion3D
+var navigation_baking: bool = false
+var _build_serial: int = 0
 
 var _cache: Dictionary = {}
 ## Путь модели -> [{"shape": Shape3D, "transform": Transform3D}, ...].
@@ -61,6 +65,7 @@ var _props: Node3D
 var _has_models: bool = ResourceLoader.exists(COMMERCIAL + "building-a.glb")
 
 func build(seed_value: int = 20260920) -> void:
+	_build_serial += 1
 	# Повторный вызов не должен удваивать карту. remove_child до queue_free —
 	# иначе освобождение отложится до конца кадра, имя "Props" окажется занято
 	# и новый узел получит имя "Props2".
@@ -80,6 +85,40 @@ func build(seed_value: int = 20260920) -> void:
 	_build_ground()
 	_build_cells()
 	_build_boundary()
+	_build_navigation()
+
+## Parse only collision shapes, avoiding GPU mesh readback. Recast runs once
+## on a worker; bots wait for the new navigation map to synchronize.
+func _build_navigation() -> void:
+	navigation_baking = true
+	navigation_region = NavigationRegion3D.new()
+	navigation_region.name = "NavigationRegion"
+	add_child(navigation_region)
+	var mesh := NavigationMesh.new()
+	mesh.geometry_parsed_geometry_type = NavigationMesh.PARSED_GEOMETRY_STATIC_COLLIDERS
+	mesh.geometry_collision_mask = 1
+	mesh.agent_height = 2.0
+	mesh.agent_radius = 0.75
+	mesh.agent_max_climb = 0.25
+	mesh.agent_max_slope = 42.0
+	mesh.cell_size = 0.25
+	mesh.cell_height = 0.25
+	mesh.edge_max_error = 0.8
+	mesh.filter_walkable_low_height_spans = true
+	mesh.filter_ledge_spans = true
+	# Only ground level is reachable; don't create islands on tower roofs.
+	var extent := size_meters()
+	mesh.filter_baking_aabb = AABB(Vector3(-extent * 0.5, -1.0, -extent * 0.5), Vector3(extent, 4.0, extent))
+	var geometry := NavigationMeshSourceGeometryData3D.new()
+	NavigationServer3D.parse_source_geometry_data(mesh, geometry, self)
+	NavigationServer3D.bake_from_source_geometry_data_async(mesh, geometry, _finish_navigation.bind(mesh, _build_serial))
+
+func _finish_navigation(mesh: NavigationMesh, serial: int) -> void:
+	if serial != _build_serial or not is_instance_valid(navigation_region):
+		return
+	navigation_region.navigation_mesh = mesh
+	navigation_baking = false
+	navigation_ready.emit()
 
 func size_meters() -> float:
 	return LAYOUT.size() * GRID
@@ -194,6 +233,7 @@ func _place_model(path: String, position: Vector3, yaw: float, with_collision: b
 	node.position = position
 	node.rotation.y = yaw
 	node.scale = Vector3.ONE * GRID
+	node.set_meta("surface", "metal" if "shipping-container" in path or "tank" in path or "water-tower" in path else "concrete")
 	if with_collision:
 		_attach_collision(node, _collision_shapes(path, node))
 	return node
